@@ -15,7 +15,7 @@ use crate::terminal::TerminalId;
 mod metadata;
 pub use metadata::{AgentMetadata, AgentMetadataReport, EffectivePresentation};
 
-const CLAUDE_WORKING_HOLD: Duration = Duration::from_millis(1200);
+const SCREEN_WORKING_HOLD: Duration = Duration::from_millis(1200);
 const STALE_HOOK_IDLE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -314,6 +314,10 @@ impl TerminalState {
         if self.known_agent_label_conflicts_with_detected_agent(&agent_label) {
             return None;
         }
+        let session_ref = session_ref.map(|session_ref| {
+            self.conflicting_current_session_ref(&source, &agent_label, &session_ref)
+                .unwrap_or(session_ref)
+        });
         self.persisted_agent_session = None;
         self.hook_authority = Some(HookAuthority {
             source,
@@ -421,6 +425,27 @@ impl TerminalState {
         })
     }
 
+    fn conflicting_current_session_ref(
+        &self,
+        source: &str,
+        agent_label: &str,
+        session_ref: &crate::agent_resume::AgentSessionRef,
+    ) -> Option<crate::agent_resume::AgentSessionRef> {
+        self.current_session_identity_for_persistence().and_then(
+            |(current_source, current_agent, current_kind, current_value)| {
+                (current_source == source
+                    && current_agent == agent_label
+                    && current_kind == crate::agent_resume::AgentSessionRefKind::Id
+                    && session_ref.kind == crate::agent_resume::AgentSessionRefKind::Id
+                    && (current_kind != session_ref.kind || current_value != session_ref.value))
+                    .then_some(crate::agent_resume::AgentSessionRef {
+                        kind: current_kind,
+                        value: current_value,
+                    })
+            },
+        )
+    }
+
     pub fn set_persisted_agent_session(
         &mut self,
         session: crate::agent_resume::PersistedAgentSession,
@@ -440,6 +465,12 @@ impl TerminalState {
             return None;
         }
         if self.known_agent_label_conflicts_with_detected_agent(&agent_label) {
+            return None;
+        }
+        if self
+            .conflicting_current_session_ref(&source, &agent_label, &session_ref)
+            .is_some()
+        {
             return None;
         }
 
@@ -640,7 +671,7 @@ impl TerminalState {
                 )
                 .is_some_and(|(observed_at, reported_at)| {
                     reported_at >= observed_at
-                        && reported_at.duration_since(observed_at) < CLAUDE_WORKING_HOLD
+                        && reported_at.duration_since(observed_at) < SCREEN_WORKING_HOLD
                 })
     }
 
@@ -783,21 +814,21 @@ pub(crate) fn stabilize_agent_state(
     previous: AgentState,
     raw: AgentState,
     now: std::time::Instant,
-    last_claude_working_at: &mut Option<std::time::Instant>,
+    last_screen_working_at: &mut Option<std::time::Instant>,
 ) -> AgentState {
-    if agent != Some(Agent::Claude) {
+    if !matches!(agent, Some(Agent::Claude | Agent::Droid)) {
         return raw;
     }
 
     match raw {
         AgentState::Working => {
-            *last_claude_working_at = Some(now);
+            *last_screen_working_at = Some(now);
             AgentState::Working
         }
         AgentState::Blocked => AgentState::Blocked,
         AgentState::Idle if previous == AgentState::Working => {
-            if last_claude_working_at
-                .is_some_and(|last_working| now.duration_since(last_working) < CLAUDE_WORKING_HOLD)
+            if last_screen_working_at
+                .is_some_and(|last_working| now.duration_since(last_working) < SCREEN_WORKING_HOLD)
             {
                 AgentState::Working
             } else {
@@ -814,7 +845,7 @@ pub(crate) fn stabilize_agent_detection(
     detection: crate::detect::AgentDetection,
     process_exited: bool,
     now: std::time::Instant,
-    last_claude_working_at: &mut Option<std::time::Instant>,
+    last_screen_working_at: &mut Option<std::time::Instant>,
 ) -> AgentState {
     if process_exited {
         return detection.state;
@@ -825,7 +856,7 @@ pub(crate) fn stabilize_agent_detection(
         previous,
         detection.state,
         now,
-        last_claude_working_at,
+        last_screen_working_at,
     )
 }
 
@@ -836,6 +867,14 @@ mod tests {
 
     fn test_terminal() -> TerminalState {
         TerminalState::new(TerminalId::alloc(), "/tmp".into())
+    }
+
+    fn test_session_path(name: &str) -> String {
+        std::env::current_dir()
+            .unwrap()
+            .join(name)
+            .display()
+            .to_string()
     }
 
     #[test]
@@ -871,7 +910,7 @@ mod tests {
             Some(Agent::Claude),
             AgentState::Working,
             AgentState::Idle,
-            now + CLAUDE_WORKING_HOLD + std::time::Duration::from_millis(1),
+            now + SCREEN_WORKING_HOLD + std::time::Duration::from_millis(1),
             &mut last_working,
         );
         assert_eq!(state, AgentState::Idle);
@@ -924,7 +963,84 @@ mod tests {
     }
 
     #[test]
-    fn non_claude_states_are_unchanged() {
+    fn droid_working_is_sticky_for_short_gap() {
+        let now = std::time::Instant::now();
+        let mut last_working = None;
+
+        let working = stabilize_agent_state(
+            Some(Agent::Droid),
+            AgentState::Idle,
+            AgentState::Working,
+            now,
+            &mut last_working,
+        );
+        assert_eq!(working, AgentState::Working);
+
+        let still_working = stabilize_agent_state(
+            Some(Agent::Droid),
+            AgentState::Working,
+            AgentState::Idle,
+            now + std::time::Duration::from_millis(400),
+            &mut last_working,
+        );
+        assert_eq!(still_working, AgentState::Working);
+    }
+
+    #[test]
+    fn droid_transitions_to_idle_after_hold_expires() {
+        let now = std::time::Instant::now();
+        let mut last_working = Some(now);
+
+        let state = stabilize_agent_state(
+            Some(Agent::Droid),
+            AgentState::Working,
+            AgentState::Idle,
+            now + SCREEN_WORKING_HOLD + std::time::Duration::from_millis(1),
+            &mut last_working,
+        );
+        assert_eq!(state, AgentState::Idle);
+    }
+
+    #[test]
+    fn process_exit_idle_bypasses_droid_working_hold() {
+        let now = std::time::Instant::now();
+        let mut last_working = Some(now);
+
+        let state = stabilize_agent_detection(
+            Some(Agent::Droid),
+            AgentState::Working,
+            AgentDetection {
+                state: AgentState::Idle,
+                skip_state_update: false,
+                visible_blocker: false,
+                visible_idle: false,
+                visible_working: false,
+            },
+            true,
+            now + std::time::Duration::from_millis(100),
+            &mut last_working,
+        );
+
+        assert_eq!(state, AgentState::Idle);
+    }
+
+    #[test]
+    fn droid_blocked_bypasses_working_hold() {
+        let now = std::time::Instant::now();
+        let mut last_working = Some(now);
+
+        let state = stabilize_agent_state(
+            Some(Agent::Droid),
+            AgentState::Working,
+            AgentState::Blocked,
+            now + std::time::Duration::from_millis(100),
+            &mut last_working,
+        );
+        assert_eq!(state, AgentState::Blocked);
+    }
+
+    #[test]
+    fn codex_states_are_unchanged_by_screen_working_hold() {
         let now = std::time::Instant::now();
         let mut last_working = None;
 
@@ -1290,7 +1406,7 @@ mod tests {
             None,
             None,
             None,
-            now + CLAUDE_WORKING_HOLD + Duration::from_millis(1),
+            now + SCREEN_WORKING_HOLD + Duration::from_millis(1),
         );
 
         assert_eq!(terminal.state, AgentState::Idle);
@@ -1325,7 +1441,7 @@ mod tests {
             Some("permission".into()),
             None,
             None,
-            now + CLAUDE_WORKING_HOLD + Duration::from_millis(1),
+            now + SCREEN_WORKING_HOLD + Duration::from_millis(1),
         );
 
         assert_eq!(terminal.state, AgentState::Blocked);
@@ -1337,7 +1453,7 @@ mod tests {
             false,
             true,
             false,
-            now + CLAUDE_WORKING_HOLD + Duration::from_millis(800),
+            now + SCREEN_WORKING_HOLD + Duration::from_millis(800),
         );
 
         assert_eq!(terminal.state, AgentState::Working);
@@ -1728,6 +1844,7 @@ mod tests {
     #[test]
     fn accepted_hook_report_stores_session_ref() {
         let mut terminal = test_terminal();
+        let session_path = test_session_path("pi.jsonl");
         let mutation = terminal
             .set_hook_authority_with_session_ref(
                 "herdr:pi".into(),
@@ -1735,7 +1852,7 @@ mod tests {
                 AgentState::Working,
                 None,
                 None,
-                crate::agent_resume::AgentSessionRef::path("/tmp/pi.jsonl"),
+                crate::agent_resume::AgentSessionRef::path(session_path.clone()),
                 Some(20),
             )
             .expect("accepted report");
@@ -1749,7 +1866,7 @@ mod tests {
                 .map(|session_ref| (&session_ref.kind, session_ref.value.as_str())),
             Some((
                 &crate::agent_resume::AgentSessionRefKind::Path,
-                "/tmp/pi.jsonl"
+                session_path.as_str()
             ))
         );
     }
@@ -1757,13 +1874,15 @@ mod tests {
     #[test]
     fn stale_hook_report_cannot_overwrite_session_ref() {
         let mut terminal = test_terminal();
+        let session_path = test_session_path("pi.jsonl");
+        let new_session_path = test_session_path("new.jsonl");
         terminal.set_hook_authority_with_session_ref(
             "herdr:pi".into(),
             "pi".into(),
             AgentState::Working,
             None,
             None,
-            crate::agent_resume::AgentSessionRef::path("/tmp/pi.jsonl"),
+            crate::agent_resume::AgentSessionRef::path(session_path.clone()),
             Some(20),
         );
 
@@ -1773,7 +1892,7 @@ mod tests {
             AgentState::Working,
             None,
             None,
-            crate::agent_resume::AgentSessionRef::path("/tmp/new.jsonl"),
+            crate::agent_resume::AgentSessionRef::path(new_session_path),
             Some(19),
         );
 
@@ -1784,20 +1903,21 @@ mod tests {
                 .as_ref()
                 .and_then(|authority| authority.session_ref.as_ref())
                 .map(|session_ref| session_ref.value.as_str()),
-            Some("/tmp/pi.jsonl")
+            Some(session_path.as_str())
         );
     }
 
     #[test]
     fn accepted_hook_report_without_session_ref_clears_previous_ref() {
         let mut terminal = test_terminal();
+        let session_path = test_session_path("pi.jsonl");
         terminal.set_hook_authority_with_session_ref(
             "herdr:pi".into(),
             "pi".into(),
             AgentState::Working,
             None,
             None,
-            crate::agent_resume::AgentSessionRef::path("/tmp/pi.jsonl"),
+            crate::agent_resume::AgentSessionRef::path(session_path),
             Some(20),
         );
 
@@ -1848,15 +1968,147 @@ mod tests {
     }
 
     #[test]
+    fn different_same_agent_session_ref_is_ignored_until_current_session_clears() {
+        let mut terminal = test_terminal();
+        terminal
+            .set_agent_session_ref(
+                "herdr:claude".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id("claude-session"),
+                Some(20),
+            )
+            .expect("initial session should be accepted");
+
+        let mutation = terminal.set_agent_session_ref(
+            "herdr:claude".into(),
+            "claude".into(),
+            crate::agent_resume::AgentSessionRef::id("nested-session"),
+            Some(21),
+        );
+
+        assert!(mutation.is_none());
+        assert_eq!(
+            terminal.hook_report_sequences.get("herdr:claude"),
+            Some(&21)
+        );
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("claude-session")
+        );
+    }
+
+    #[test]
+    fn repeated_same_agent_session_ref_is_accepted_without_session_change() {
+        let mut terminal = test_terminal();
+        terminal
+            .set_agent_session_ref(
+                "herdr:claude".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id("claude-session"),
+                Some(20),
+            )
+            .expect("initial session should be accepted");
+
+        let mutation = terminal
+            .set_agent_session_ref(
+                "herdr:claude".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id("claude-session"),
+                Some(21),
+            )
+            .expect("same session should be accepted");
+
+        assert!(!mutation.session_ref_changed);
+    }
+
+    #[test]
+    fn hook_authority_preserves_current_session_ref_when_incoming_ref_differs() {
+        let mut terminal = test_terminal();
+        terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:copilot".into(),
+                "copilot".into(),
+                AgentState::Working,
+                None,
+                None,
+                crate::agent_resume::AgentSessionRef::id("copilot-session"),
+                Some(20),
+            )
+            .expect("initial session should be accepted");
+
+        let mutation = terminal
+            .set_hook_authority_with_session_ref(
+                "herdr:copilot".into(),
+                "copilot".into(),
+                AgentState::Blocked,
+                Some("needs approval".into()),
+                None,
+                crate::agent_resume::AgentSessionRef::id("nested-session"),
+                Some(21),
+            )
+            .expect("state update should still be accepted");
+
+        assert!(!mutation.session_ref_changed);
+        assert_eq!(terminal.state, AgentState::Blocked);
+        assert_eq!(
+            terminal
+                .hook_authority
+                .as_ref()
+                .and_then(|authority| authority.session_ref.as_ref())
+                .map(|session_ref| session_ref.value.as_str()),
+            Some("copilot-session")
+        );
+    }
+
+    #[test]
+    fn different_same_agent_session_ref_is_accepted_after_detection_clears_current_session() {
+        let mut terminal = test_terminal();
+        terminal.set_detected_state(Some(Agent::Claude), AgentState::Working);
+        terminal
+            .set_agent_session_ref(
+                "herdr:claude".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id("claude-session"),
+                Some(20),
+            )
+            .expect("initial session should be accepted");
+
+        let clear = terminal.set_detected_state_with_mutation(None, AgentState::Unknown);
+        assert!(clear.session_ref_changed);
+
+        let mutation = terminal
+            .set_agent_session_ref(
+                "herdr:claude".into(),
+                "claude".into(),
+                crate::agent_resume::AgentSessionRef::id("new-session"),
+                Some(21),
+            )
+            .expect("new session should be accepted after clear");
+
+        assert!(mutation.session_ref_changed);
+        assert_eq!(
+            terminal
+                .persisted_agent_session
+                .as_ref()
+                .map(|session| session.session_ref.value.as_str()),
+            Some("new-session")
+        );
+    }
+
+    #[test]
     fn clearing_hook_authority_clears_session_ref() {
         let mut terminal = test_terminal();
+        let session_path = test_session_path("pi.jsonl");
         terminal.set_hook_authority_with_session_ref(
             "herdr:pi".into(),
             "pi".into(),
             AgentState::Working,
             None,
             None,
-            crate::agent_resume::AgentSessionRef::path("/tmp/pi.jsonl"),
+            crate::agent_resume::AgentSessionRef::path(session_path),
             Some(20),
         );
 
@@ -1871,13 +2123,14 @@ mod tests {
     #[test]
     fn release_agent_clears_session_ref() {
         let mut terminal = test_terminal();
+        let session_path = test_session_path("pi.jsonl");
         terminal.set_hook_authority_with_session_ref(
             "herdr:pi".into(),
             "pi".into(),
             AgentState::Working,
             None,
             None,
-            crate::agent_resume::AgentSessionRef::path("/tmp/pi.jsonl"),
+            crate::agent_resume::AgentSessionRef::path(session_path),
             Some(20),
         );
 

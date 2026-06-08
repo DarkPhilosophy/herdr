@@ -62,8 +62,16 @@ impl App {
         msg: crate::api::ApiRequestMessage,
     ) -> bool {
         let previous_mode = self.state.mode;
-        let changed = crate::api::request_changes_ui(&msg.request);
+        let mut changed = crate::api::request_changes_ui(&msg.request);
+        let skip_default_workspace = matches!(
+            &msg.request.method,
+            crate::api::schema::Method::ServerStop(_)
+                | crate::api::schema::Method::ServerLiveHandoff(_)
+        );
         let response = self.handle_api_request(msg.request);
+        if !skip_default_workspace {
+            changed |= self.ensure_default_workspace();
+        }
         let _ = msg.respond_to.send(response);
         self.sync_prefix_input_source(previous_mode);
         changed
@@ -194,6 +202,21 @@ impl App {
             self.toast_deadline = None;
             self.state.toast = None;
             changed = true;
+        }
+
+        if self
+            .state
+            .next_pending_agent_notification_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            let previous_toast = self.state.toast.clone();
+            let mut deliveries = self.state.drain_due_agent_notifications(now);
+            if !deliveries.is_empty() {
+                self.refresh_agent_notification_delivery_contexts(&mut deliveries);
+                self.emit_delayed_client_local_agent_notifications(&deliveries);
+                self.sync_toast_deadline(previous_toast);
+                changed = true;
+            }
         }
 
         if self
@@ -501,6 +524,7 @@ impl App {
             include_resize_poll.then_some(self.next_resize_poll),
             self.config_diagnostic_deadline,
             self.toast_deadline,
+            self.state.next_pending_agent_notification_deadline(),
             self.copy_feedback_deadline,
             self.next_animation_tick,
             include_git_refresh

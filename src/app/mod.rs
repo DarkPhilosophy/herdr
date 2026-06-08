@@ -97,6 +97,7 @@ pub struct App {
     pub(crate) config_diagnostic_deadline: Option<Instant>,
     pub(crate) toast_deadline: Option<Instant>,
     pub(crate) copy_feedback_deadline: Option<Instant>,
+    pub(crate) last_api_notification_at: Option<Instant>,
     pub(crate) last_git_remote_status_refresh: Instant,
     pub(crate) git_refresh_in_flight: bool,
     pub(crate) git_refresh_due_after_in_flight: bool,
@@ -479,6 +480,7 @@ impl App {
             update_dismissed: false,
             config_diagnostic,
             toast: None,
+            pending_agent_notifications: std::collections::HashMap::new(),
             copy_feedback: None,
             outer_terminal_focus: None,
             prefix_code,
@@ -568,6 +570,7 @@ impl App {
             config_diagnostic_deadline: None,
             toast_deadline: None,
             copy_feedback_deadline: None,
+            last_api_notification_at: None,
             state,
             terminal_runtimes: restored_terminal_runtimes,
             event_tx,
@@ -806,6 +809,10 @@ impl App {
                 needs_render = true;
             }
 
+            if self.ensure_default_workspace() {
+                needs_render = true;
+            }
+
             let now = Instant::now();
             self.sync_animation_timer(now);
             self.sync_host_mouse_capture(&mut host_mouse_capture_active)?;
@@ -932,6 +939,33 @@ impl App {
         }
         *active = desired;
         Ok(())
+    }
+
+    pub(crate) fn ensure_default_workspace(&mut self) -> bool {
+        if !self.state.workspaces.is_empty() || self.state.mode == Mode::Onboarding {
+            return false;
+        }
+
+        let previous_mode = self.state.mode;
+        let preserve_mode = matches!(
+            previous_mode,
+            Mode::ReleaseNotes | Mode::ProductAnnouncement | Mode::Settings
+        );
+        let cwd = self.resolve_new_terminal_cwd(None);
+
+        match self.create_workspace_with_options(cwd, true) {
+            Ok(_) => {
+                if preserve_mode {
+                    self.state.mode = previous_mode;
+                }
+                true
+            }
+            Err(err) => {
+                tracing::error!(err = %err, "failed to create default workspace");
+                self.state.mode = Mode::Navigate;
+                false
+            }
+        }
     }
 
     pub(crate) fn dismiss_release_notes(&mut self) {
@@ -1232,6 +1266,7 @@ impl App {
                     kind: crate::app::state::ToastKind::UpdateInstalled,
                     title: "reloaded config".to_string(),
                     context: "using config.toml".to_string(),
+                    position: None,
                     target: None,
                 });
             }
@@ -1243,6 +1278,7 @@ impl App {
                     kind: crate::app::state::ToastKind::UpdateInstalled,
                     title: "reloaded config".to_string(),
                     context: "with warnings".to_string(),
+                    position: None,
                     target: None,
                 });
             }
@@ -1475,6 +1511,16 @@ mod tests {
         )
     }
 
+    #[cfg(windows)]
+    fn exiting_test_command() -> &'static str {
+        "C:\\Windows\\System32\\whoami.exe"
+    }
+
+    #[cfg(not(windows))]
+    fn exiting_test_command() -> &'static str {
+        "/usr/bin/true"
+    }
+
     #[derive(Clone, Default)]
     struct FakePrefixInputSource {
         switch_calls: Rc<Cell<usize>>,
@@ -1699,12 +1745,26 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_feedback_can_be_disabled() {
+        let mut app = test_app();
+        app.state.toast_config.clipboard.enabled = false;
+
+        app.handle_internal_event(AppEvent::ClipboardWrite {
+            content: b"copied".to_vec(),
+        });
+
+        assert!(app.state.copy_feedback.is_none());
+        assert!(app.copy_feedback_deadline.is_none());
+    }
+
+    #[test]
     fn clipboard_feedback_does_not_replace_notification_toast() {
         let mut app = test_app();
         app.state.toast = Some(crate::app::state::ToastNotification {
             kind: crate::app::state::ToastKind::NeedsAttention,
             title: "pi needs attention".to_string(),
             context: "background · 2".to_string(),
+            position: None,
             target: None,
         });
         let original_toast = app.state.toast.clone();
@@ -1721,6 +1781,172 @@ mod tests {
                 .map(|feedback| feedback.message.as_str()),
             Some("copied to clipboard")
         );
+    }
+
+    #[test]
+    fn notification_show_api_creates_herdr_toast_with_position() {
+        let mut app = test_app();
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+
+        let response =
+            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+                id: "notify".into(),
+                method: crate::api::schema::Method::NotificationShow(
+                    crate::api::schema::NotificationShowParams {
+                        title: "build failed".into(),
+                        body: Some("api workspace".into()),
+                        position: Some(crate::config::ToastHerdrPosition::TopLeft),
+                        sound: crate::api::schema::NotificationShowSound::None,
+                    },
+                ),
+            });
+
+        let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            parsed.result,
+            crate::api::schema::ResponseResult::NotificationShow {
+                shown: true,
+                reason: crate::api::schema::NotificationShowReason::Shown,
+            }
+        );
+        let toast = app.state.toast.as_ref().expect("api toast");
+        assert_eq!(toast.title, "build failed");
+        assert_eq!(toast.context, "api workspace");
+        assert_eq!(
+            toast.position,
+            Some(crate::config::ToastHerdrPosition::TopLeft)
+        );
+        assert!(app.toast_deadline.is_some());
+    }
+
+    #[test]
+    fn notification_show_api_herdr_toast_expires() {
+        let mut app = test_app();
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+
+        let response =
+            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+                id: "notify".into(),
+                method: crate::api::schema::Method::NotificationShow(
+                    crate::api::schema::NotificationShowParams {
+                        title: "build failed".into(),
+                        body: None,
+                        position: None,
+                        sound: crate::api::schema::NotificationShowSound::None,
+                    },
+                ),
+            });
+
+        let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            parsed.result,
+            crate::api::schema::ResponseResult::NotificationShow {
+                shown: true,
+                reason: crate::api::schema::NotificationShowReason::Shown,
+            }
+        );
+        let deadline = app.toast_deadline.expect("api toast deadline");
+        assert!(app.handle_scheduled_tasks(deadline, false));
+        assert!(app.state.toast.is_none());
+        assert!(app.toast_deadline.is_none());
+    }
+
+    #[test]
+    fn notification_show_api_respects_off_delivery() {
+        let mut app = test_app();
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Off;
+
+        let response =
+            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+                id: "notify".into(),
+                method: crate::api::schema::Method::NotificationShow(
+                    crate::api::schema::NotificationShowParams {
+                        title: "build failed".into(),
+                        body: None,
+                        position: None,
+                        sound: crate::api::schema::NotificationShowSound::None,
+                    },
+                ),
+            });
+
+        let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            parsed.result,
+            crate::api::schema::ResponseResult::NotificationShow {
+                shown: false,
+                reason: crate::api::schema::NotificationShowReason::Disabled,
+            }
+        );
+        assert!(app.state.toast.is_none());
+    }
+
+    #[test]
+    fn notification_show_api_does_not_replace_existing_toast() {
+        let mut app = test_app();
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.state.toast = Some(crate::app::state::ToastNotification {
+            kind: crate::app::state::ToastKind::NeedsAttention,
+            title: "pi needs attention".to_string(),
+            context: "background · 2".to_string(),
+            position: None,
+            target: None,
+        });
+
+        let response =
+            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+                id: "notify".into(),
+                method: crate::api::schema::Method::NotificationShow(
+                    crate::api::schema::NotificationShowParams {
+                        title: "build failed".into(),
+                        body: None,
+                        position: None,
+                        sound: crate::api::schema::NotificationShowSound::None,
+                    },
+                ),
+            });
+
+        let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            parsed.result,
+            crate::api::schema::ResponseResult::NotificationShow {
+                shown: false,
+                reason: crate::api::schema::NotificationShowReason::Busy,
+            }
+        );
+        assert_eq!(
+            app.state.toast.as_ref().map(|toast| toast.title.as_str()),
+            Some("pi needs attention")
+        );
+    }
+
+    #[test]
+    fn notification_show_api_is_rate_limited() {
+        let mut app = test_app();
+        app.state.toast_config.delivery = crate::config::ToastDelivery::Herdr;
+        app.mark_api_notification_shown(Instant::now());
+
+        let response =
+            app.handle_api_request_after_internal_events_drained(crate::api::schema::Request {
+                id: "notify".into(),
+                method: crate::api::schema::Method::NotificationShow(
+                    crate::api::schema::NotificationShowParams {
+                        title: "build failed".into(),
+                        body: None,
+                        position: None,
+                        sound: crate::api::schema::NotificationShowSound::None,
+                    },
+                ),
+            });
+
+        let parsed: crate::api::schema::SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(
+            parsed.result,
+            crate::api::schema::ResponseResult::NotificationShow {
+                shown: false,
+                reason: crate::api::schema::NotificationShowReason::RateLimited,
+            }
+        );
+        assert!(app.state.toast.is_none());
     }
 
     #[test]
@@ -2559,12 +2785,40 @@ mod tests {
                 crate::api::schema::WorktreeCreateParams::default(),
             ),
         };
+        let pane_swap = crate::api::schema::Request {
+            id: "req_6".into(),
+            method: crate::api::schema::Method::PaneSwap(crate::api::schema::PaneSwapParams {
+                pane_id: Some("w_1-1".into()),
+                direction: Some(crate::api::schema::PaneDirection::Right),
+                ..crate::api::schema::PaneSwapParams::default()
+            }),
+        };
+        let pane_focus_direction = crate::api::schema::Request {
+            id: "req_7".into(),
+            method: crate::api::schema::Method::PaneFocusDirection(
+                crate::api::schema::PaneFocusDirectionParams {
+                    pane_id: Some("w_1-1".into()),
+                    direction: crate::api::schema::PaneDirection::Right,
+                },
+            ),
+        };
+        let pane_resize = crate::api::schema::Request {
+            id: "req_8".into(),
+            method: crate::api::schema::Method::PaneResize(crate::api::schema::PaneResizeParams {
+                pane_id: Some("w_1-1".into()),
+                direction: crate::api::schema::PaneDirection::Right,
+                amount: Some(0.05),
+            }),
+        };
 
         assert!(!crate::api::request_changes_ui(&read_only));
         assert!(!crate::api::request_changes_ui(&worktree_list));
         assert!(crate::api::request_changes_ui(&mutating));
         assert!(crate::api::request_changes_ui(&pane_rename));
         assert!(crate::api::request_changes_ui(&worktree_create));
+        assert!(crate::api::request_changes_ui(&pane_swap));
+        assert!(crate::api::request_changes_ui(&pane_focus_direction));
+        assert!(crate::api::request_changes_ui(&pane_resize));
     }
 
     #[test]
@@ -2641,6 +2895,18 @@ mod tests {
         );
 
         assert_eq!(cwd, std::path::PathBuf::from("/tmp/herdr-source"));
+    }
+
+    #[test]
+    fn new_terminal_cwd_follow_without_source_uses_home() {
+        let Some(home) = std::env::var_os("HOME").map(std::path::PathBuf::from) else {
+            return;
+        };
+
+        let cwd =
+            creation::resolve_new_terminal_cwd(&crate::config::NewTerminalCwdConfig::Follow, None);
+
+        assert_eq!(cwd, home);
     }
 
     #[test]
@@ -2856,7 +3122,7 @@ mod tests {
     async fn pane_split_request_targets_pane_in_background_tab() {
         let _guard = config_env_lock().lock().unwrap();
         let original_shell = std::env::var_os("SHELL");
-        std::env::set_var("SHELL", "/usr/bin/true");
+        std::env::set_var("SHELL", exiting_test_command());
 
         let mut app = test_app();
         let mut workspace = Workspace::test_new("api-pane-split-background-tab");
@@ -2893,8 +3159,9 @@ mod tests {
             id: "req_pane_split_background_tab".into(),
             method: crate::api::schema::Method::PaneSplit(crate::api::schema::PaneSplitParams {
                 workspace_id: None,
-                target_pane_id,
+                target_pane_id: Some(target_pane_id),
                 direction: crate::api::schema::SplitDirection::Right,
+                ratio: None,
                 cwd: None,
                 focus: false,
             }),
@@ -2952,7 +3219,7 @@ mod tests {
     async fn pane_split_request_focuses_new_pane_when_requested() {
         let _guard = config_env_lock().lock().unwrap();
         let original_shell = std::env::var_os("SHELL");
-        std::env::set_var("SHELL", "/usr/bin/true");
+        std::env::set_var("SHELL", exiting_test_command());
 
         let mut app = test_app();
         let mut workspace = Workspace::test_new("api-pane-split-focus-background-tab");
@@ -2971,8 +3238,9 @@ mod tests {
             id: "req_pane_split_focus_background_tab".into(),
             method: crate::api::schema::Method::PaneSplit(crate::api::schema::PaneSplitParams {
                 workspace_id: None,
-                target_pane_id,
+                target_pane_id: Some(target_pane_id),
                 direction: crate::api::schema::SplitDirection::Right,
+                ratio: None,
                 cwd: None,
                 focus: true,
             }),
@@ -2984,6 +3252,97 @@ mod tests {
         assert_eq!(response["result"]["pane"]["focused"], true);
         assert_eq!(app.state.active, Some(0));
         assert_eq!(app.state.workspaces[0].active_tab, background_tab);
+
+        let runtimes: Vec<_> = app.terminal_runtimes.drain().collect();
+        for (_terminal_id, runtime) in runtimes {
+            runtime.shutdown();
+        }
+        match original_shell {
+            Some(value) => std::env::set_var("SHELL", value),
+            None => std::env::remove_var("SHELL"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pane_split_request_applies_ratio() {
+        let _guard = config_env_lock().lock().unwrap();
+        let original_shell = std::env::var_os("SHELL");
+        std::env::set_var("SHELL", "/usr/bin/true");
+
+        let mut app = test_app();
+        let workspace = Workspace::test_new("api-pane-split-ratio");
+        let target_pane = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+
+        let target_pane_id = app.pane_info(0, target_pane).unwrap().pane_id;
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_pane_split_ratio".into(),
+            method: crate::api::schema::Method::PaneSplit(crate::api::schema::PaneSplitParams {
+                workspace_id: None,
+                target_pane_id: Some(target_pane_id),
+                direction: crate::api::schema::SplitDirection::Right,
+                ratio: Some(0.333),
+                cwd: None,
+                focus: false,
+            }),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(response["result"]["type"], "pane_info");
+        let splits = app.state.workspaces[0].tabs[0]
+            .layout
+            .splits(ratatui::layout::Rect::new(0, 0, 100, 20));
+        assert_eq!(splits.len(), 1);
+        assert!((splits[0].ratio - 0.333).abs() < f32::EPSILON);
+
+        let runtimes: Vec<_> = app.terminal_runtimes.drain().collect();
+        for (_terminal_id, runtime) in runtimes {
+            runtime.shutdown();
+        }
+        match original_shell {
+            Some(value) => std::env::set_var("SHELL", value),
+            None => std::env::remove_var("SHELL"),
+        }
+    }
+
+    #[tokio::test]
+    async fn pane_split_request_uses_active_focused_pane_when_target_is_omitted() {
+        let _guard = config_env_lock().lock().unwrap();
+        let original_shell = std::env::var_os("SHELL");
+        std::env::set_var("SHELL", "/usr/bin/true");
+
+        let mut app = test_app();
+        let workspace = Workspace::test_new("api-pane-split-current");
+        let target_pane = workspace.tabs[0].root_pane;
+        app.state.workspaces = vec![workspace];
+        app.state.ensure_test_terminals();
+        app.state.active = Some(0);
+        app.state.selected = 0;
+        app.state.focus_pane_in_workspace(0, target_pane);
+
+        let response = app.handle_api_request(crate::api::schema::Request {
+            id: "req_pane_split_current".into(),
+            method: crate::api::schema::Method::PaneSplit(crate::api::schema::PaneSplitParams {
+                workspace_id: None,
+                target_pane_id: None,
+                direction: crate::api::schema::SplitDirection::Right,
+                ratio: None,
+                cwd: None,
+                focus: false,
+            }),
+        });
+        let response: serde_json::Value = serde_json::from_str(&response).unwrap();
+
+        assert_eq!(response["result"]["type"], "pane_info");
+        assert_eq!(app.state.workspaces[0].tabs[0].layout.pane_count(), 2);
+        assert_eq!(
+            app.state.workspaces[0].tabs[0].layout.focused(),
+            target_pane
+        );
 
         let runtimes: Vec<_> = app.terminal_runtimes.drain().collect();
         for (_terminal_id, runtime) in runtimes {
@@ -3014,7 +3373,7 @@ mod tests {
                 tab_id: None,
                 split: Some(crate::api::schema::SplitDirection::Right),
                 focus: true,
-                argv: vec!["/usr/bin/true".into()],
+                argv: vec![exiting_test_command().into()],
             }),
         });
         let response: serde_json::Value = serde_json::from_str(&response).unwrap();

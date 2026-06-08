@@ -23,6 +23,26 @@ enum WheelRouting {
 const WORKSPACE_DRAG_THRESHOLD: u16 = 1;
 const TAB_DRAG_THRESHOLD: u16 = 1;
 
+#[cfg(target_os = "macos")]
+fn modified_url_click_modifier() -> KeyModifiers {
+    KeyModifiers::SUPER
+}
+
+#[cfg(not(target_os = "macos"))]
+fn modified_url_click_modifier() -> KeyModifiers {
+    KeyModifiers::CONTROL
+}
+
+#[cfg(test)]
+#[test]
+fn modified_url_click_modifier_matches_platform_primary_modifier() {
+    #[cfg(target_os = "macos")]
+    assert_eq!(modified_url_click_modifier(), KeyModifiers::SUPER);
+
+    #[cfg(not(target_os = "macos"))]
+    assert_eq!(modified_url_click_modifier(), KeyModifiers::CONTROL);
+}
+
 mod copy_mode;
 mod modal;
 mod mouse;
@@ -262,7 +282,7 @@ impl App {
     fn handle_modified_url_click(&mut self, mouse: MouseEvent) -> bool {
         if self.state.mode != Mode::Terminal
             || !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-            || !mouse.modifiers.contains(KeyModifiers::CONTROL)
+            || !mouse.modifiers.contains(modified_url_click_modifier())
         {
             return false;
         }
@@ -526,6 +546,7 @@ fn unique_temp_path(name: &str) -> std::path::PathBuf {
 }
 
 #[cfg(test)]
+#[cfg(unix)]
 fn wait_for_file(path: &std::path::Path) -> String {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
     while std::time::Instant::now() < deadline {
