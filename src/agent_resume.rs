@@ -198,6 +198,7 @@ fn is_official_agent_source(source: &str, agent: &str) -> bool {
             | ("herdr:devin", "devin")
             | ("herdr:droid", "droid")
             | ("herdr:kimi", "kimi")
+            | ("herdr:omp", "omp")
             | ("herdr:pi", "pi")
             | ("herdr:hermes", "hermes")
             | ("herdr:opencode", "opencode")
@@ -382,6 +383,18 @@ mod tests {
             &AgentSessionRef::path(&claude_session).unwrap()
         )
         .is_none());
+    }
+    #[test]
+    fn omp_reports_session_ref_but_has_no_resume_plan() {
+        // omp is a full-lifecycle authority source, so it must carry a session ref
+        // for suppression to distinguish runs (see #614).
+        let session_ref =
+            session_ref_from_report("herdr:omp", "omp", Some("omp-id".into()), None).unwrap();
+        assert_eq!(session_ref.kind, AgentSessionRefKind::Id);
+        assert_eq!(session_ref.value, "omp-id");
+
+        // omp has no resume CLI path, so planning stays a no-op.
+        assert!(plan("herdr:omp", "omp", &session_ref).is_none());
     }
 
     #[test]

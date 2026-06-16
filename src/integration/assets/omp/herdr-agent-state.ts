@@ -2,15 +2,22 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=omp
-// HERDR_INTEGRATION_VERSION=2
+// HERDR_INTEGRATION_VERSION=3
 // @ts-nocheck
 
+import { randomUUID } from "node:crypto";
 import { createConnection } from "node:net";
 
 const HERDR_ENV = process.env.HERDR_ENV;
 const socketPath = process.env.HERDR_SOCKET_PATH;
 const paneId = process.env.HERDR_PANE_ID;
 const source = "herdr:omp";
+// Stable per-process id so each fresh omp run is a distinct session. herdr keys
+// full-lifecycle-hook suppression on (source, session_ref); without a session id
+// a released omp hook stays suppressed and never reappears on same-pane restart
+// (see #614). A new id per process clears that suppression on restart, matching
+// every other full-lifecycle agent.
+const agentSessionId = randomUUID();
 
 function enabled() {
   return HERDR_ENV === "1" && !!socketPath && !!paneId;
@@ -82,6 +89,7 @@ function sendState(state: AgentState, message?: string, seq = nextReportSeq()): 
       state,
       message,
       seq,
+      agent_session_id: agentSessionId,
     },
   });
 }

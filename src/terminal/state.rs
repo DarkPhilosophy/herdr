@@ -1494,6 +1494,49 @@ mod tests {
     }
 
     #[test]
+    fn omp_reacquires_full_lifecycle_hook_after_release_with_fresh_session_id() {
+        let mut terminal = test_terminal();
+        terminal.set_hook_authority_with_session_ref(
+            "herdr:omp".into(),
+            "omp".into(),
+            AgentState::Working,
+            None,
+            None,
+            crate::agent_resume::AgentSessionRef::id("omp-old"),
+            Some(20),
+        );
+        terminal.release_agent("herdr:omp", "omp", Some(21));
+
+        // A late report from the released run (same session id) stays suppressed,
+        // so a just-exited omp hook cannot resurrect the pane.
+        let stale = terminal.set_hook_authority_with_session_ref(
+            "herdr:omp".into(),
+            "omp".into(),
+            AgentState::Working,
+            None,
+            None,
+            crate::agent_resume::AgentSessionRef::id("omp-old"),
+            Some(22),
+        );
+        assert!(stale.is_none());
+        assert!(terminal.hook_authority.is_none());
+
+        // A fresh omp run (new session id) reacquires authority on the same pane.
+        let fresh = terminal.set_hook_authority_with_session_ref(
+            "herdr:omp".into(),
+            "omp".into(),
+            AgentState::Working,
+            None,
+            None,
+            crate::agent_resume::AgentSessionRef::id("omp-new"),
+            Some(23),
+        );
+        assert!(fresh.is_some());
+        assert!(terminal.hook_authority.is_some());
+        assert_eq!(terminal.state, AgentState::Working);
+    }
+
+    #[test]
     fn visible_blocker_overrides_non_blocked_hook_for_same_agent() {
         let mut terminal = test_terminal();
         terminal.set_detected_state(Some(Agent::Codex), AgentState::Idle);
