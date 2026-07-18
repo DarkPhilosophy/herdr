@@ -1569,10 +1569,7 @@ impl AppState {
             return;
         }
 
-        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
-            self.view.sidebar_rect,
-            self.sidebar_section_split,
-        );
+        let detail_area = self.agent_panel_rect();
         self.agent_panel_scroll = crate::ui::agent_panel_scroll_for_target(
             self,
             detail_area,
@@ -4377,7 +4374,7 @@ mod tests {
     }
 
     #[test]
-    fn previous_agent_keeps_wrapped_target_visible_in_agent_panel() {
+    fn previous_agent_uses_pinned_section_reduced_viewport_for_focus_follow() {
         let mut workspace = Workspace::test_new("one");
         let root = workspace.tabs[0].root_pane;
         for idx in 1..8 {
@@ -4395,13 +4392,51 @@ mod tests {
             mark_agent(&mut state, 0, tab_idx, pane_id);
         }
         state.workspaces[0].tabs[0].layout.focus_pane(root);
+        state.sidebar_sections_config = vec![crate::config::CustomSidebarSectionConfig {
+            id: "build".into(),
+            title: None,
+            max_rows: 3,
+            placement: crate::config::SidebarSectionPlacement::BelowAgents,
+        }];
+        state
+            .sidebar_section_reports
+            .report(
+                "build".into(),
+                "test",
+                None,
+                None,
+                (0..3)
+                    .map(|index| crate::api::schema::SectionRow::Spans {
+                        spans: vec![crate::api::schema::SectionSpan {
+                            text: format!("row-{index}"),
+                            color: None,
+                            bold: false,
+                            dim: false,
+                        }],
+                        right: Vec::new(),
+                    })
+                    .collect(),
+                std::time::Instant::now(),
+            )
+            .unwrap();
         crate::ui::compute_view(&mut state, ratatui::layout::Rect::new(0, 0, 80, 14));
+        let (_, full_area) = crate::ui::expanded_sidebar_sections(
+            state.view.sidebar_rect,
+            state.sidebar_section_split,
+        );
+        let reduced_area = state.agent_panel_rect();
+        let target_idx = crate::ui::agent_panel_entries(&state).len() - 1;
+        let full_scroll =
+            crate::ui::agent_panel_scroll_for_target(&state, full_area, 0, target_idx);
+        let reduced_scroll =
+            crate::ui::agent_panel_scroll_for_target(&state, reduced_area, 0, target_idx);
+        assert_ne!(full_scroll, reduced_scroll);
 
         state.previous_agent();
 
         let last_idx = state.workspaces[0].tabs.len() - 1;
         assert_eq!(state.workspaces[0].active_tab, last_idx);
-        assert!(state.agent_panel_scroll > 0);
+        assert_eq!(state.agent_panel_scroll, reduced_scroll);
         state.assert_invariants_for_test();
     }
 

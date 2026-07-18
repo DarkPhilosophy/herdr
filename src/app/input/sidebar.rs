@@ -13,7 +13,7 @@ impl AppState {
         crate::ui::workspace_list_rect(sidebar, self.sidebar_section_split)
     }
 
-    pub(super) fn agent_panel_rect(&self) -> Rect {
+    pub(crate) fn agent_panel_rect(&self) -> Rect {
         let sidebar = self.view.sidebar_rect;
         if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
             return Rect::default();
