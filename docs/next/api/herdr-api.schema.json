@@ -3844,10 +3844,11 @@
         "SidebarReportSectionParams": {
           "properties": {
             "rows": {
+              "description": "Rows to display. An empty list from the owning source clears the\nsection and releases ownership for another source.",
               "items": {
                 "$ref": "#/schemas/request/$defs/SectionRow"
               },
-              "maxItems": 16,
+              "maxItems": 24,
               "type": "array"
             },
             "section_id": {
@@ -3864,6 +3865,7 @@
               ]
             },
             "source": {
+              "description": "Stable reporter identity. The first accepted non-empty report owns the\nsection until that owner clears it or its content expires.",
               "type": "string"
             },
             "ttl_ms": {

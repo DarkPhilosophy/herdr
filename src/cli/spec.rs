@@ -39,6 +39,7 @@ pub(super) fn command() -> Command {
         .subcommand(tab_command())
         .subcommand(notification_command())
         .subcommand(pair_command())
+        .subcommand(sidebar_command())
         .subcommand(agent_command())
         .subcommand(pane_command())
         .subcommand(terminal_command())
@@ -330,6 +331,20 @@ fn notification_command() -> Command {
                     "bottom-right",
                 ]))
                 .arg(option("sound", "SOUND").value_parser(["none", "done", "request"])),
+        )
+}
+
+fn sidebar_command() -> Command {
+    Command::new("sidebar")
+        .about("Publish custom sidebar sections")
+        .subcommand(
+            Command::new("report-section")
+                .about("Read section params JSON from stdin and publish it")
+                .arg(
+                    flag("stdin")
+                        .required(true)
+                        .help("Read the sidebar.report_section params object from stdin"),
+                ),
         )
 }
 
@@ -1326,6 +1341,14 @@ mod tests {
                 .contains("live-handoff"),
             "herdr --help must list live-handoff"
         );
+    }
+
+    #[test]
+    fn spec_exposes_stdin_only_sidebar_report_section() {
+        let cmd = super::command();
+        let report = command_path(&cmd, &["sidebar", "report-section"]);
+        assert!(has_option(report, "stdin"));
+        assert_eq!(report.get_arguments().count(), 1);
     }
 
     #[test]

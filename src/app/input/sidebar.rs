@@ -1504,14 +1504,15 @@ mod tests {
                 "test",
                 None,
                 None,
-                vec![crate::api::schema::SectionRow::Spans(vec![
-                    crate::api::schema::SectionSpan {
+                vec![crate::api::schema::SectionRow::Spans {
+                    spans: vec![crate::api::schema::SectionSpan {
                         text: "ready".into(),
                         color: None,
                         bold: false,
                         dim: false,
-                    },
-                ])],
+                    }],
+                    right: Vec::new(),
+                }],
                 std::time::Instant::now(),
             )
             .unwrap();

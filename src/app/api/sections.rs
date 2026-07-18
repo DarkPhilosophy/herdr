@@ -1,9 +1,11 @@
-use crate::api::schema::{ResponseResult, SectionRow, SectionSpan, SidebarReportSectionParams};
+use crate::api::schema::{
+    ResponseResult, SectionBar, SectionRow, SectionSpan, SidebarReportSectionParams,
+};
 use crate::app::App;
 
 use super::responses::{encode_error, encode_success};
 
-const MAX_SECTION_ROWS: usize = 16;
+const MAX_SECTION_ROWS: usize = 24;
 const MAX_SECTION_SPANS: usize = 8;
 const MAX_SECTION_TEXT_CHARS: usize = 240;
 
@@ -24,6 +26,18 @@ impl App {
             Ok(source) => source,
             Err(message) => return encode_error(id, "invalid_metadata_source", message),
         };
+        if let Some(owner) = self
+            .state
+            .sidebar_section_reports
+            .owner(&params.section_id)
+            .filter(|owner| *owner != source)
+        {
+            return encode_error(
+                id,
+                "sidebar_section_owned",
+                format!("sidebar section is owned by source {owner}"),
+            );
+        }
         let ttl = match super::super::api_helpers::normalize_metadata_ttl(params.ttl_ms) {
             Ok(ttl) => ttl,
             Err(message) => return encode_error(id, "invalid_metadata_ttl", message),
@@ -43,7 +57,14 @@ impl App {
         ) {
             Ok(true) => self.sync_agent_metadata_deadline(),
             Ok(false) => {}
-            Err(()) => {
+            Err(crate::app::sidebar_sections::SidebarSectionReportError::Owned { owner }) => {
+                return encode_error(
+                    id,
+                    "sidebar_section_owned",
+                    format!("sidebar section is owned by source {owner}"),
+                );
+            }
+            Err(crate::app::sidebar_sections::SidebarSectionReportError::SequenceSourceLimit) => {
                 return encode_error(
                     id,
                     "metadata_sequence_source_limit",
@@ -71,12 +92,19 @@ fn normalize_section_rows(
 
     rows.into_iter()
         .map(|row| match row {
-            SectionRow::Spans(spans) => normalize_section_spans(spans).map(SectionRow::Spans),
-            SectionRow::Bar { fraction, label } => Ok(SectionRow::Bar {
-                fraction: fraction.clamp(0.0, 1.0),
-                label: label.as_deref().and_then(|label| {
-                    super::sanitized_notification_text(label, MAX_SECTION_TEXT_CHARS)
-                }),
+            SectionRow::Spans { spans, right } => Ok(SectionRow::Spans {
+                spans: normalize_section_spans(spans)?,
+                right: normalize_section_spans(right)?,
+            }),
+            SectionRow::Bar { bar } => Ok(SectionRow::Bar {
+                bar: SectionBar {
+                    fraction: bar.fraction.clamp(0.0, 1.0),
+                    label: bar.label.as_deref().and_then(|label| {
+                        super::sanitized_notification_text(label, MAX_SECTION_TEXT_CHARS)
+                    }),
+                    fill: normalize_section_color(bar.fill)?,
+                    empty: normalize_section_color(bar.empty)?,
+                },
             }),
         })
         .collect()
@@ -95,23 +123,29 @@ fn normalize_section_spans(
     spans
         .into_iter()
         .map(|span| {
-            if let Some(color) = span.color.as_deref() {
-                if !section_color_is_valid(color) {
-                    return Err((
-                        "invalid_sidebar_section_color",
-                        format!("unsupported sidebar section color: {color}"),
-                    ));
-                }
-            }
             Ok(SectionSpan {
                 text: super::sanitized_notification_text(&span.text, MAX_SECTION_TEXT_CHARS)
                     .unwrap_or_default(),
-                color: span.color,
+                color: normalize_section_color(span.color)?,
                 bold: span.bold,
                 dim: span.dim,
             })
         })
         .collect()
+}
+
+fn normalize_section_color(
+    color: Option<String>,
+) -> Result<Option<String>, (&'static str, String)> {
+    if let Some(color) = color.as_deref() {
+        if !section_color_is_valid(color) {
+            return Err((
+                "invalid_sidebar_section_color",
+                format!("unsupported sidebar section color: {color}"),
+            ));
+        }
+    }
+    Ok(color)
 }
 
 fn section_color_is_valid(color: &str) -> bool {
@@ -141,12 +175,15 @@ mod tests {
     }
 
     fn span_row(text: &str) -> SectionRow {
-        SectionRow::Spans(vec![SectionSpan {
-            text: text.into(),
-            color: None,
-            bold: false,
-            dim: false,
-        }])
+        SectionRow::Spans {
+            spans: vec![SectionSpan {
+                text: text.into(),
+                color: None,
+                bold: false,
+                dim: false,
+            }],
+            right: Vec::new(),
+        }
     }
 
     fn params(section_id: &str, rows: Vec<SectionRow>) -> SidebarReportSectionParams {
@@ -175,6 +212,23 @@ mod tests {
             "req".into(),
             params(
                 "build",
+                std::iter::repeat_n(span_row("row"), MAX_SECTION_ROWS).collect(),
+            ),
+        );
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, ResponseResult::Ok {});
+        assert_eq!(
+            app.state
+                .sidebar_section_reports
+                .rows("build")
+                .map(<[SectionRow]>::len),
+            Some(MAX_SECTION_ROWS)
+        );
+
+        let response = app.handle_sidebar_report_section(
+            "req".into(),
+            params(
+                "build",
                 std::iter::repeat_n(span_row("row"), MAX_SECTION_ROWS + 1).collect(),
             ),
         );
@@ -185,8 +239,8 @@ mod tests {
             "req".into(),
             params(
                 "build",
-                vec![SectionRow::Spans(
-                    std::iter::repeat_n(
+                vec![SectionRow::Spans {
+                    spans: std::iter::repeat_n(
                         SectionSpan {
                             text: "span".into(),
                             color: None,
@@ -196,7 +250,8 @@ mod tests {
                         MAX_SECTION_SPANS + 1,
                     )
                     .collect(),
-                )],
+                    right: Vec::new(),
+                }],
             ),
         );
         let error: ErrorResponse = serde_json::from_str(&response).unwrap();
@@ -206,12 +261,54 @@ mod tests {
             "req".into(),
             params(
                 "build",
-                vec![SectionRow::Spans(vec![SectionSpan {
-                    text: "span".into(),
-                    color: Some("cyan".into()),
-                    bold: false,
-                    dim: false,
-                }])],
+                vec![SectionRow::Spans {
+                    spans: Vec::new(),
+                    right: std::iter::repeat_n(
+                        SectionSpan {
+                            text: "span".into(),
+                            color: None,
+                            bold: false,
+                            dim: false,
+                        },
+                        MAX_SECTION_SPANS + 1,
+                    )
+                    .collect(),
+                }],
+            ),
+        );
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "invalid_sidebar_section_spans");
+
+        let response = app.handle_sidebar_report_section(
+            "req".into(),
+            params(
+                "build",
+                vec![SectionRow::Spans {
+                    spans: vec![SectionSpan {
+                        text: "span".into(),
+                        color: Some("cyan".into()),
+                        bold: false,
+                        dim: false,
+                    }],
+                    right: Vec::new(),
+                }],
+            ),
+        );
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "invalid_sidebar_section_color");
+
+        let response = app.handle_sidebar_report_section(
+            "req".into(),
+            params(
+                "build",
+                vec![SectionRow::Bar {
+                    bar: SectionBar {
+                        fraction: 0.5,
+                        label: None,
+                        fill: Some("cyan".into()),
+                        empty: None,
+                    },
+                }],
             ),
         );
         let error: ErrorResponse = serde_json::from_str(&response).unwrap();
@@ -226,19 +323,35 @@ mod tests {
             method: Method::SidebarReportSection(params(
                 "build",
                 vec![
-                    SectionRow::Spans(vec![SectionSpan {
-                        text: "  ready\n\t now\u{7}  ".into(),
-                        color: Some("accent".into()),
-                        bold: true,
-                        dim: false,
-                    }]),
-                    SectionRow::Bar {
-                        fraction: 2.0,
-                        label: Some("  10\n jobs  ".into()),
+                    SectionRow::Spans {
+                        spans: vec![SectionSpan {
+                            text: "  ready\n\t now\u{7}  ".into(),
+                            color: Some("accent".into()),
+                            bold: true,
+                            dim: false,
+                        }],
+                        right: vec![SectionSpan {
+                            text: "  5\n min  ".into(),
+                            color: Some("blue".into()),
+                            bold: false,
+                            dim: true,
+                        }],
                     },
                     SectionRow::Bar {
-                        fraction: -1.0,
-                        label: None,
+                        bar: SectionBar {
+                            fraction: 2.0,
+                            label: Some("  10\n jobs  ".into()),
+                            fill: Some("green".into()),
+                            empty: Some("#123456".into()),
+                        },
+                    },
+                    SectionRow::Bar {
+                        bar: SectionBar {
+                            fraction: -1.0,
+                            label: None,
+                            fill: None,
+                            empty: None,
+                        },
                     },
                 ],
             )),
@@ -249,23 +362,60 @@ mod tests {
             app.state.sidebar_section_reports.rows("build"),
             Some(
                 [
-                    SectionRow::Spans(vec![SectionSpan {
-                        text: "ready now".into(),
-                        color: Some("accent".into()),
-                        bold: true,
-                        dim: false,
-                    }]),
-                    SectionRow::Bar {
-                        fraction: 1.0,
-                        label: Some("10 jobs".into()),
+                    SectionRow::Spans {
+                        spans: vec![SectionSpan {
+                            text: "ready now".into(),
+                            color: Some("accent".into()),
+                            bold: true,
+                            dim: false,
+                        }],
+                        right: vec![SectionSpan {
+                            text: "5 min".into(),
+                            color: Some("blue".into()),
+                            bold: false,
+                            dim: true,
+                        }],
                     },
                     SectionRow::Bar {
-                        fraction: 0.0,
-                        label: None,
+                        bar: SectionBar {
+                            fraction: 1.0,
+                            label: Some("10 jobs".into()),
+                            fill: Some("green".into()),
+                            empty: Some("#123456".into()),
+                        },
+                    },
+                    SectionRow::Bar {
+                        bar: SectionBar {
+                            fraction: 0.0,
+                            label: None,
+                            fill: None,
+                            empty: None,
+                        },
                     },
                 ]
                 .as_slice()
             )
+        );
+    }
+
+    #[test]
+    fn report_section_rejects_foreign_source_with_owner_error() {
+        let mut app = test_app();
+        let mut owned = params("build", vec![span_row("owned")]);
+        owned.source = "source-a".into();
+        let _: SuccessResponse =
+            serde_json::from_str(&app.handle_sidebar_report_section("owner".into(), owned))
+                .unwrap();
+
+        let mut foreign = params("build", vec![span_row("foreign")]);
+        foreign.source = "source-b".into();
+        let response = app.handle_sidebar_report_section("foreign".into(), foreign);
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "sidebar_section_owned");
+        assert!(error.error.message.contains("source-a"));
+        assert_eq!(
+            app.state.sidebar_section_reports.rows("build"),
+            Some([span_row("owned")].as_slice())
         );
     }
 

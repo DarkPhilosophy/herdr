@@ -86,14 +86,28 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
         return;
     }
 
-    let bottom = area.y.saturating_add(area.height);
+    let requested_height = app
+        .sidebar_sections_config
+        .iter()
+        .map(|config| configured_section_height(app, config))
+        .fold(0u16, u16::saturating_add);
+    let height_overflow = requested_height > area.height;
+    let mut remaining = area.height.saturating_sub(u16::from(height_overflow));
+    let total_live_rows = app
+        .sidebar_sections_config
+        .iter()
+        .filter_map(|config| app.sidebar_section_reports.rows(&config.id))
+        .map(<[SectionRow]>::len)
+        .sum::<usize>();
+    let mut represented_rows = 0usize;
     let mut row_y = area.y;
-    for config in &app.sidebar_sections_config {
+
+    'sections: for config in &app.sidebar_sections_config {
         let Some(rows) = app.sidebar_section_reports.rows(&config.id) else {
             continue;
         };
         if let Some(title) = config.title.as_deref() {
-            if row_y >= bottom {
+            if remaining == 0 {
                 break;
             }
             frame.render_widget(
@@ -107,10 +121,19 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
                 Rect::new(area.x, row_y, area.width, 1),
             );
             row_y = row_y.saturating_add(1);
+            remaining = remaining.saturating_sub(1);
         }
-        for row in rows.iter().take(config.max_rows as usize) {
-            if row_y >= bottom {
-                return;
+
+        let max_rows = config.max_rows as usize;
+        let capped = rows.len() > max_rows;
+        let content_rows = if capped {
+            max_rows.saturating_sub(1)
+        } else {
+            rows.len()
+        };
+        for row in rows.iter().take(content_rows) {
+            if remaining == 0 {
+                break 'sections;
             }
             render_section_row(
                 frame,
@@ -118,22 +141,109 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
                 row,
                 &app.palette,
             );
+            represented_rows += 1;
             row_y = row_y.saturating_add(1);
+            remaining = remaining.saturating_sub(1);
+        }
+        if capped {
+            if remaining == 0 {
+                break;
+            }
+            let hidden = rows.len().saturating_sub(content_rows);
+            render_overflow_indicator(
+                frame,
+                Rect::new(area.x, row_y, area.width, 1),
+                hidden,
+                &app.palette,
+            );
+            represented_rows = represented_rows.saturating_add(hidden);
+            row_y = row_y.saturating_add(1);
+            remaining = remaining.saturating_sub(1);
         }
     }
+
+    if height_overflow {
+        render_overflow_indicator(
+            frame,
+            Rect::new(
+                area.x,
+                area.y.saturating_add(area.height.saturating_sub(1)),
+                area.width,
+                1,
+            ),
+            total_live_rows.saturating_sub(represented_rows),
+            &app.palette,
+        );
+    }
+}
+
+fn render_overflow_indicator(frame: &mut Frame, area: Rect, hidden: usize, palette: &Palette) {
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            format!("… {hidden} more"),
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::DIM),
+        )),
+        area,
+    );
 }
 
 fn render_section_row(frame: &mut Frame, area: Rect, row: &SectionRow, palette: &Palette) {
     match row {
-        SectionRow::Spans(spans) => render_spans(frame, area, spans, palette),
-        SectionRow::Bar { fraction, label } => {
-            render_bar(frame, area, *fraction, label.as_deref(), palette)
+        SectionRow::Spans { spans, right } => {
+            render_spans(frame, area, spans, right, palette);
         }
+        SectionRow::Bar { bar } => render_bar(
+            frame,
+            area,
+            bar.fraction,
+            bar.label.as_deref(),
+            bar.fill.as_deref(),
+            bar.empty.as_deref(),
+            palette,
+        ),
     }
 }
 
-fn render_spans(frame: &mut Frame, area: Rect, spans: &[SectionSpan], palette: &Palette) {
-    let spans = spans
+fn render_spans(
+    frame: &mut Frame,
+    area: Rect,
+    spans: &[SectionSpan],
+    right: &[SectionSpan],
+    palette: &Palette,
+) {
+    let right_width = right
+        .iter()
+        .map(|span| display_width_u16(&span.text))
+        .fold(0u16, u16::saturating_add)
+        .min(area.width);
+    let left_has_content = spans.iter().any(|span| display_width_u16(&span.text) > 0);
+    let gap = u16::from(left_has_content && right_width > 0 && area.width > right_width);
+    let left_width = area.width.saturating_sub(right_width.saturating_add(gap));
+
+    if left_width > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from(styled_spans(spans, palette))),
+            Rect::new(area.x, area.y, left_width, 1),
+        );
+    }
+    if right_width > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from(styled_spans(right, palette))).alignment(Alignment::Right),
+            Rect::new(
+                area.x
+                    .saturating_add(area.width.saturating_sub(right_width)),
+                area.y,
+                right_width,
+                1,
+            ),
+        );
+    }
+}
+
+fn styled_spans<'a>(spans: &'a [SectionSpan], palette: &Palette) -> Vec<Span<'a>> {
+    spans
         .iter()
         .map(|span| {
             let mut style = Style::default().fg(section_color(span.color.as_deref(), palette));
@@ -145,8 +255,7 @@ fn render_spans(frame: &mut Frame, area: Rect, spans: &[SectionSpan], palette: &
             }
             Span::styled(span.text.as_str(), style)
         })
-        .collect::<Vec<_>>();
-    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        .collect()
 }
 
 fn render_bar(
@@ -154,6 +263,8 @@ fn render_bar(
     area: Rect,
     fraction: f64,
     label: Option<&str>,
+    fill: Option<&str>,
+    empty: Option<&str>,
     palette: &Palette,
 ) {
     if area.width == 0 {
@@ -172,20 +283,30 @@ fn render_bar(
     for offset in 0..bar_width {
         let cell = &mut buffer[(area.x + offset, area.y)];
         if offset < filled {
-            let position = if bar_width <= 1 {
-                0.0
-            } else {
-                f64::from(offset) / f64::from(bar_width - 1)
-            };
+            let color = fill.map_or_else(
+                || {
+                    let position = if bar_width <= 1 {
+                        0.0
+                    } else {
+                        f64::from(offset) / f64::from(bar_width - 1)
+                    };
+                    lerp_color(palette.green, palette.red, position)
+                },
+                |fill| section_color(Some(fill), palette),
+            );
             cell.set_symbol("█");
-            cell.set_style(Style::default().fg(lerp_color(palette.green, palette.red, position)));
+            cell.set_style(Style::default().fg(color));
         } else {
             cell.set_symbol("░");
-            cell.set_style(
-                Style::default()
-                    .fg(palette.surface_dim)
-                    .add_modifier(Modifier::DIM),
+            let style = empty.map_or_else(
+                || {
+                    Style::default()
+                        .fg(palette.surface_dim)
+                        .add_modifier(Modifier::DIM)
+                },
+                |empty| Style::default().fg(section_color(Some(empty), palette)),
             );
+            cell.set_style(style);
         }
     }
 
@@ -248,6 +369,7 @@ fn lerp_color(start: Color, end: Color, position: f64) -> Color {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::schema::SectionBar;
     use crate::config::{CustomSidebarSectionConfig, SidebarSectionPlacement};
     use crate::workspace::Workspace;
     use ratatui::{backend::TestBackend, Terminal};
@@ -263,12 +385,43 @@ mod tests {
     }
 
     fn span_row(text: &str) -> SectionRow {
-        SectionRow::Spans(vec![SectionSpan {
-            text: text.into(),
-            color: None,
-            bold: false,
-            dim: false,
-        }])
+        SectionRow::Spans {
+            spans: vec![SectionSpan {
+                text: text.into(),
+                color: None,
+                bold: false,
+                dim: false,
+            }],
+            right: Vec::new(),
+        }
+    }
+
+    fn split_span_row(left: &str, right: &str) -> SectionRow {
+        SectionRow::Spans {
+            spans: vec![SectionSpan {
+                text: left.into(),
+                color: None,
+                bold: false,
+                dim: false,
+            }],
+            right: vec![SectionSpan {
+                text: right.into(),
+                color: Some("subtext0".into()),
+                bold: false,
+                dim: true,
+            }],
+        }
+    }
+
+    fn bar_row() -> SectionRow {
+        SectionRow::Bar {
+            bar: SectionBar {
+                fraction: 0.5,
+                label: None,
+                fill: Some("green".into()),
+                empty: Some("subtext0".into()),
+            },
+        }
     }
 
     fn report(app: &mut AppState, id: &str, rows: Vec<SectionRow>) {
@@ -288,7 +441,7 @@ mod tests {
     }
 
     #[test]
-    fn section_with_title_renders_at_bottom_caps_rows_and_shrinks_agents() {
+    fn section_with_title_renders_max_rows_overflow_at_bottom_and_shrinks_agents() {
         let mut app = AppState::test_new();
         app.workspaces = (1..=6)
             .map(|index| Workspace::test_new(&format!("agent-{index}")))
@@ -303,11 +456,11 @@ mod tests {
                 Some(crate::detect::Agent::Pi);
         }
         app.sidebar_agents.rows = vec![vec![crate::config::AgentSidebarToken::Workspace]];
-        app.sidebar_sections_config = vec![config("build", Some("build status"), 1)];
+        app.sidebar_sections_config = vec![config("build", Some("build status"), 2)];
         report(
             &mut app,
             "build",
-            vec![span_row("ready"), span_row("capped")],
+            vec![span_row("ready"), span_row("capped"), span_row("hidden")],
         );
 
         let area = Rect::new(0, 0, 20, 20);
@@ -317,10 +470,9 @@ mod tests {
         let layout = sidebar_sections_layout(&app, detail_area);
         let reduced_metrics =
             super::super::sidebar::agent_panel_scroll_metrics(&app, layout.agent_area);
-        assert_eq!(layout.sections_area.height, 2);
-        assert_eq!(layout.agent_area.height, detail_area.height - 2);
-        assert_eq!(full_metrics.viewport_rows, 6);
-        assert_eq!(reduced_metrics.viewport_rows, 5);
+        assert_eq!(layout.sections_area.height, 3);
+        assert_eq!(layout.agent_area.height, detail_area.height - 3);
+        assert!(reduced_metrics.viewport_rows < full_metrics.viewport_rows);
 
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
@@ -346,11 +498,123 @@ mod tests {
             ),
             "ready"
         );
+        assert_eq!(
+            row_text(
+                buffer,
+                layout.sections_area.y + 2,
+                layout.sections_area.width
+            ),
+            "… 2 more"
+        );
+        assert!(buffer[(layout.sections_area.x, layout.sections_area.y + 2)]
+            .style()
+            .add_modifier
+            .contains(Modifier::DIM));
         let agents = (layout.agent_area.y..layout.agent_area.y + layout.agent_area.height)
             .map(|row| row_text(buffer, row, layout.agent_area.width))
             .collect::<Vec<_>>()
             .join("\n");
         assert!(!agents.contains("agent-6"), "rendered agents: {agents}");
+    }
+
+    #[test]
+    fn single_account_payload_renders_all_rows_and_reports_height_overflow() {
+        let mut rows = Vec::with_capacity(11);
+        rows.push(span_row("ACCOUNT"));
+        for window in 1..=5 {
+            rows.push(split_span_row(
+                &format!("window-{window}"),
+                &format!("{}% 5m", window * 10),
+            ));
+            rows.push(bar_row());
+        }
+        assert_eq!(rows.len(), 11);
+
+        let mut app = AppState::test_new();
+        app.sidebar_sections_config = vec![config("account", None, 12)];
+        report(&mut app, "account", rows);
+
+        let roomy_area = Rect::new(0, 0, 20, 30);
+        let roomy_layout = sidebar_sections_layout(&app, roomy_area);
+        assert_eq!(roomy_layout.sections_area.height, 11);
+        let mut roomy_terminal =
+            Terminal::new(TestBackend::new(roomy_area.width, roomy_area.height)).unwrap();
+        roomy_terminal
+            .draw(|frame| render_sidebar_sections(&app, frame, roomy_layout.sections_area))
+            .unwrap();
+        let roomy_rows = (roomy_layout.sections_area.y
+            ..roomy_layout.sections_area.y + roomy_layout.sections_area.height)
+            .map(|row| row_text(roomy_terminal.backend().buffer(), row, roomy_area.width))
+            .collect::<Vec<_>>();
+        assert_eq!(roomy_rows.len(), 11);
+        assert!(roomy_rows.iter().all(|row| !row.is_empty()));
+        assert_eq!(roomy_rows[0], "ACCOUNT");
+        assert!(roomy_rows[1].starts_with("window-1"));
+        assert!(roomy_rows[1].ends_with("10% 5m"));
+        assert_eq!(display_width_u16(&roomy_rows[2]), roomy_area.width);
+        assert!(roomy_rows.iter().all(|row| !row.contains("more")));
+
+        let cramped_area = Rect::new(0, 0, 20, 10);
+        let cramped_layout = sidebar_sections_layout(&app, cramped_area);
+        assert_eq!(cramped_layout.agent_area.height, 3);
+        assert_eq!(cramped_layout.sections_area.height, 7);
+        let mut cramped_terminal =
+            Terminal::new(TestBackend::new(cramped_area.width, cramped_area.height)).unwrap();
+        cramped_terminal
+            .draw(|frame| render_sidebar_sections(&app, frame, cramped_layout.sections_area))
+            .unwrap();
+        let overflow_y = cramped_layout
+            .sections_area
+            .y
+            .saturating_add(cramped_layout.sections_area.height - 1);
+        assert_eq!(
+            row_text(
+                cramped_terminal.backend().buffer(),
+                overflow_y,
+                cramped_area.width
+            ),
+            "… 5 more"
+        );
+        assert!(
+            cramped_terminal.backend().buffer()[(cramped_layout.sections_area.x, overflow_y)]
+                .style()
+                .add_modifier
+                .contains(Modifier::DIM)
+        );
+    }
+
+    #[test]
+    fn twenty_four_row_boundary_renders_without_overflow() {
+        let mut app = AppState::test_new();
+        app.sidebar_sections_config = vec![config("boundary", None, 24)];
+        report(
+            &mut app,
+            "boundary",
+            (0..24)
+                .map(|index| span_row(&format!("row-{index:02}")))
+                .collect(),
+        );
+
+        let area = Rect::new(0, 0, 20, 27);
+        let layout = sidebar_sections_layout(&app, area);
+        assert_eq!(layout.sections_area.height, 24);
+        assert_eq!(layout.agent_area.height, 3);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar_sections(&app, frame, layout.sections_area))
+            .unwrap();
+        let rendered = (0..24)
+            .map(|offset| {
+                row_text(
+                    terminal.backend().buffer(),
+                    layout.sections_area.y + offset,
+                    area.width,
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(rendered.first().map(String::as_str), Some("row-00"));
+        assert_eq!(rendered.last().map(String::as_str), Some("row-23"));
+        assert!(rendered.iter().all(|row| !row.contains("more")));
     }
 
     #[test]
@@ -365,7 +629,17 @@ mod tests {
             0
         );
 
-        report(&mut app, "build", Vec::new());
+        assert_eq!(
+            app.sidebar_section_reports.report(
+                "build".into(),
+                "test",
+                None,
+                None,
+                Vec::new(),
+                Instant::now(),
+            ),
+            Ok(false)
+        );
         assert_eq!(
             sidebar_sections_layout(&app, detail_area)
                 .sections_area
@@ -417,6 +691,8 @@ mod tests {
                         Rect::new(0, row as u16, 10, 1),
                         fraction,
                         None,
+                        None,
+                        None,
                         &app.palette,
                     );
                 }
@@ -434,22 +710,63 @@ mod tests {
     }
 
     #[test]
+    fn bar_color_overrides_use_uniform_fill_and_custom_empty_color() {
+        let app = AppState::test_new();
+        let mut terminal = Terminal::new(TestBackend::new(10, 2)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_bar(
+                    frame,
+                    Rect::new(0, 0, 10, 1),
+                    0.5,
+                    None,
+                    Some("#123456"),
+                    None,
+                    &app.palette,
+                );
+                render_bar(
+                    frame,
+                    Rect::new(0, 1, 10, 1),
+                    0.5,
+                    None,
+                    None,
+                    Some("mauve"),
+                    &app.palette,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        for column in 0..5 {
+            assert_eq!(
+                buffer[(column, 0)].style().fg,
+                Some(Color::Rgb(0x12, 0x34, 0x56))
+            );
+        }
+        for column in 5..10 {
+            assert_eq!(buffer[(column, 1)].style().fg, Some(app.palette.mauve));
+        }
+    }
+
+    #[test]
     fn span_rows_resolve_named_and_rgb_colors_with_modifiers() {
         let app = AppState::test_new();
-        let row = SectionRow::Spans(vec![
-            SectionSpan {
-                text: "A".into(),
-                color: Some("accent".into()),
-                bold: true,
-                dim: false,
-            },
-            SectionSpan {
-                text: "B".into(),
-                color: Some("#123456".into()),
-                bold: false,
-                dim: true,
-            },
-        ]);
+        let row = SectionRow::Spans {
+            spans: vec![
+                SectionSpan {
+                    text: "A".into(),
+                    color: Some("accent".into()),
+                    bold: true,
+                    dim: false,
+                },
+                SectionSpan {
+                    text: "B".into(),
+                    color: Some("#123456".into()),
+                    bold: false,
+                    dim: true,
+                },
+            ],
+            right: Vec::new(),
+        };
         let mut terminal = Terminal::new(TestBackend::new(2, 1)).unwrap();
         terminal
             .draw(|frame| render_section_row(frame, Rect::new(0, 0, 2, 1), &row, &app.palette))
@@ -462,6 +779,33 @@ mod tests {
             Some(Color::Rgb(0x12, 0x34, 0x56))
         );
         assert!(buffer[(1, 0)].style().add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn right_span_cluster_wins_width_and_keeps_one_cell_gap() {
+        let app = AppState::test_new();
+        let row = split_span_row("abcdefghij", "R9");
+        let mut terminal = Terminal::new(TestBackend::new(12, 1)).unwrap();
+        terminal
+            .draw(|frame| render_section_row(frame, Rect::new(0, 0, 12, 1), &row, &app.palette))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            (0..9)
+                .map(|column| buffer[(column, 0)].symbol())
+                .collect::<String>(),
+            "abcdefghi"
+        );
+        assert_eq!(buffer[(9, 0)].symbol(), " ");
+        assert_eq!(buffer[(10, 0)].symbol(), "R");
+        assert_eq!(buffer[(11, 0)].symbol(), "9");
+        for column in 10..12 {
+            assert_eq!(buffer[(column, 0)].style().fg, Some(app.palette.subtext0));
+            assert!(buffer[(column, 0)]
+                .style()
+                .add_modifier
+                .contains(Modifier::DIM));
+        }
     }
 
     #[test]
