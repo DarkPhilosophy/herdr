@@ -99,6 +99,9 @@ fn normalize_section_rows(
             SectionRow::Bar { bar } => Ok(SectionRow::Bar {
                 bar: SectionBar {
                     fraction: bar.fraction.clamp(0.0, 1.0),
+                    title: bar.title.as_deref().and_then(|title| {
+                        super::sanitized_notification_text(title, MAX_SECTION_TEXT_CHARS)
+                    }),
                     label: bar.label.as_deref().and_then(|label| {
                         super::sanitized_notification_text(label, MAX_SECTION_TEXT_CHARS)
                     }),
@@ -304,6 +307,7 @@ mod tests {
                 vec![SectionRow::Bar {
                     bar: SectionBar {
                         fraction: 0.5,
+                        title: None,
                         label: None,
                         fill: Some("cyan".into()),
                         empty: None,
@@ -340,6 +344,7 @@ mod tests {
                     SectionRow::Bar {
                         bar: SectionBar {
                             fraction: 2.0,
+                            title: Some("  mum\n 5h  ".into()),
                             label: Some("  10\n jobs  ".into()),
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
@@ -348,6 +353,7 @@ mod tests {
                     SectionRow::Bar {
                         bar: SectionBar {
                             fraction: -1.0,
+                            title: None,
                             label: None,
                             fill: None,
                             empty: None,
@@ -379,6 +385,7 @@ mod tests {
                     SectionRow::Bar {
                         bar: SectionBar {
                             fraction: 1.0,
+                            title: Some("mum 5h".into()),
                             label: Some("10 jobs".into()),
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
@@ -387,6 +394,7 @@ mod tests {
                     SectionRow::Bar {
                         bar: SectionBar {
                             fraction: 0.0,
+                            title: None,
                             label: None,
                             fill: None,
                             empty: None,

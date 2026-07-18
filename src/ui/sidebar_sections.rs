@@ -198,6 +198,7 @@ fn render_section_row(frame: &mut Frame, area: Rect, row: &SectionRow, palette: 
             frame,
             area,
             bar.fraction,
+            bar.title.as_deref(),
             bar.label.as_deref(),
             bar.fill.as_deref(),
             bar.empty.as_deref(),
@@ -258,10 +259,16 @@ fn styled_spans<'a>(spans: &'a [SectionSpan], palette: &Palette) -> Vec<Span<'a>
         .collect()
 }
 
+/// A bar row's point is the bar itself: reserve this many cells before
+/// granting any width to the left title or the right label.
+const MIN_BAR_CELLS: u16 = 6;
+
+#[allow(clippy::too_many_arguments)]
 fn render_bar(
     frame: &mut Frame,
     area: Rect,
     fraction: f64,
+    title: Option<&str>,
     label: Option<&str>,
     fill: Option<&str>,
     empty: Option<&str>,
@@ -271,17 +278,43 @@ fn render_bar(
         return;
     }
 
+    let reserved_bar = MIN_BAR_CELLS.min(area.width);
     let label = label
-        .map(|label| truncate_end(label, area.width.saturating_sub(1) as usize))
+        .map(|label| {
+            truncate_end(
+                label,
+                area.width
+                    .saturating_sub(reserved_bar.saturating_add(1))
+                    .into(),
+            )
+        })
         .unwrap_or_default();
     let label_width = display_width_u16(&label).min(area.width);
-    let gap = u16::from(label_width > 0 && area.width > label_width);
-    let bar_width = area.width.saturating_sub(label_width.saturating_add(gap));
+    let label_gap = u16::from(label_width > 0);
+    let title = title
+        .map(|title| {
+            truncate_end(
+                title,
+                area.width
+                    .saturating_sub(reserved_bar)
+                    .saturating_sub(label_width.saturating_add(label_gap))
+                    .saturating_sub(1)
+                    .into(),
+            )
+        })
+        .unwrap_or_default();
+    let title_width = display_width_u16(&title).min(area.width);
+    let title_gap = u16::from(title_width > 0);
+    let bar_x = area.x + title_width + title_gap;
+    let bar_width = area
+        .width
+        .saturating_sub(title_width.saturating_add(title_gap))
+        .saturating_sub(label_width.saturating_add(label_gap));
     let filled = ((fraction.clamp(0.0, 1.0) * f64::from(bar_width)).round() as u16).min(bar_width);
 
     let buffer = frame.buffer_mut();
     for offset in 0..bar_width {
-        let cell = &mut buffer[(area.x + offset, area.y)];
+        let cell = &mut buffer[(bar_x + offset, area.y)];
         if offset < filled {
             let color = fill.map_or_else(
                 || {
@@ -310,6 +343,12 @@ fn render_bar(
         }
     }
 
+    if title_width > 0 {
+        frame.render_widget(
+            Paragraph::new(Span::styled(title, Style::default().fg(palette.text))),
+            Rect::new(area.x, area.y, title_width, 1),
+        );
+    }
     if label_width > 0 {
         frame.render_widget(
             Paragraph::new(Span::styled(label, Style::default().fg(palette.subtext0)))
@@ -417,6 +456,7 @@ mod tests {
         SectionRow::Bar {
             bar: SectionBar {
                 fraction: 0.5,
+                title: None,
                 label: None,
                 fill: Some("green".into()),
                 empty: Some("subtext0".into()),
@@ -680,6 +720,58 @@ mod tests {
     }
 
     #[test]
+    fn bar_title_renders_left_and_reserves_minimum_bar() {
+        let app = AppState::test_new();
+        let mut terminal = Terminal::new(TestBackend::new(26, 2)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_bar(
+                    frame,
+                    Rect::new(0, 0, 26, 1),
+                    0.5,
+                    Some("mum 5h"),
+                    Some("42% \u{21bb}1h47"),
+                    None,
+                    None,
+                    &app.palette,
+                );
+                render_bar(
+                    frame,
+                    Rect::new(0, 1, 26, 1),
+                    1.0,
+                    Some("victor spark 5h window"),
+                    Some("100% \u{21bb}23h59"),
+                    None,
+                    None,
+                    &app.palette,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let row0 = row_text(buffer, 0, 26);
+        assert!(row0.starts_with("mum 5h "), "title leads the row: {row0}");
+        assert!(
+            row0.ends_with("42% \u{21bb}1h47"),
+            "label ends the row: {row0}"
+        );
+        assert_eq!(
+            row0.matches('█').count() + row0.matches('░').count(),
+            9,
+            "bar takes the middle budget: {row0}"
+        );
+        let row1 = row_text(buffer, 1, 26);
+        assert!(
+            row1.ends_with("100% \u{21bb}23h59"),
+            "right label wins: {row1}"
+        );
+        assert_eq!(
+            row1.matches('█').count(),
+            MIN_BAR_CELLS as usize,
+            "minimum bar cells reserved under a long title: {row1}"
+        );
+    }
+
+    #[test]
     fn bar_fill_cell_count_matches_fraction_boundaries() {
         let app = AppState::test_new();
         let mut terminal = Terminal::new(TestBackend::new(10, 3)).unwrap();
@@ -690,6 +782,7 @@ mod tests {
                         frame,
                         Rect::new(0, row as u16, 10, 1),
                         fraction,
+                        None,
                         None,
                         None,
                         None,
@@ -720,6 +813,7 @@ mod tests {
                     Rect::new(0, 0, 10, 1),
                     0.5,
                     None,
+                    None,
                     Some("#123456"),
                     None,
                     &app.palette,
@@ -728,6 +822,7 @@ mod tests {
                     frame,
                     Rect::new(0, 1, 10, 1),
                     0.5,
+                    None,
                     None,
                     None,
                     Some("mauve"),

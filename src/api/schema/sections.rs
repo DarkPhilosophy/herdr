@@ -38,6 +38,9 @@ pub enum SectionRow {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SectionBar {
     pub fraction: f64,
+    /// Left-aligned title rendered before the bar cells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Uniform color for filled cells. Uses the span color grammar; when
@@ -81,6 +84,7 @@ mod tests {
                     },
                     {"bar": {
                         "fraction": 0.5,
+                        "title": "queue",
                         "label": "5/10",
                         "fill": "#123456",
                         "empty": "subtext0"
@@ -113,6 +117,7 @@ mod tests {
                 SectionRow::Bar {
                     bar: SectionBar {
                         fraction: 0.5,
+                        title: Some("queue".into()),
                         label: Some("5/10".into()),
                         fill: Some("#123456".into()),
                         empty: Some("subtext0".into()),
