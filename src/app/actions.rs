@@ -1007,6 +1007,7 @@ impl AppState {
                     .iter()
                     .filter_map(|workspace| workspace.metadata_tokens.next_expiry()),
             )
+            .chain(self.sidebar_section_reports.next_expiry())
             .min()
     }
 
@@ -1103,6 +1104,7 @@ impl AppState {
                 workspace.metadata_tokens.expire_at(now).then_some(ws_idx)
             })
             .collect();
+        self.sidebar_section_reports.expire_at(now);
         (changed_panes, changed_workspaces)
     }
 

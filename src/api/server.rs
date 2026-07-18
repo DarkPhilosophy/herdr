@@ -398,6 +398,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::RemoteSetKeybindings(_) => "remote.set_keybindings",
         Method::SessionList(_) => "session.list",
         Method::NotificationShow(_) => "notification.show",
+        Method::SidebarReportSection(_) => "sidebar.report_section",
         Method::ClientWindowTitleSet(_) => "client.window_title.set",
         Method::ClientWindowTitleClear(_) => "client.window_title.clear",
         Method::SessionSnapshot(_) => "session.snapshot",

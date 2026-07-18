@@ -8,6 +8,7 @@ pub mod mx;
 pub mod panes;
 pub mod plugins;
 pub mod response;
+pub mod sections;
 pub mod server;
 pub mod session;
 pub mod tabs;
@@ -22,6 +23,7 @@ pub use mx::*;
 pub use panes::*;
 pub use plugins::*;
 pub use response::*;
+pub use sections::*;
 pub use server::*;
 pub use session::*;
 pub use tabs::*;
@@ -79,6 +81,8 @@ pub enum Method {
     SessionList(EmptyParams),
     #[serde(rename = "notification.show")]
     NotificationShow(NotificationShowParams),
+    #[serde(rename = "sidebar.report_section")]
+    SidebarReportSection(SidebarReportSectionParams),
     #[serde(rename = "client.window_title.set")]
     ClientWindowTitleSet(ClientWindowTitleSetParams),
     #[serde(rename = "client.window_title.clear")]

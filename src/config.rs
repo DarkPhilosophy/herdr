@@ -3,6 +3,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 mod io;
 mod keybinds;
 pub(crate) mod model;
+mod sidebar;
 mod sound;
 mod tab_bar;
 mod theme;
@@ -27,6 +28,10 @@ pub use self::{
         SidebarHostConfig, SidebarItem, SidebarSpaceField, SidebarSpacesConfig,
         StatusIndicatorStyle, TabBarPositionConfig, ToastClipboardPosition, ToastConfig,
         ToastDelivery, ToastHerdrPosition, UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
+    },
+    sidebar::{
+        AgentSidebarToken, AgentsSidebarConfig, CustomSidebarSectionConfig, SidebarConfig,
+        SidebarSectionPlacement, SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,
     tab_bar::TabBarRightEntryConfig,
@@ -90,6 +95,7 @@ impl Config {
             .chain(window_title_diagnostics(&self.ui.window_title))
             .chain(self.invalid_sidebar_bounds_diagnostic())
             .chain(self.invalid_headless_size_diagnostic())
+            .chain(self.ui.sidebar.section_diagnostics())
             .collect()
     }
 

@@ -241,6 +241,14 @@ pub(super) fn normalize_metadata_ttl(
     Ok(Some(std::time::Duration::from_millis(ttl_ms)))
 }
 
+pub(super) fn metadata_token_name_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_METADATA_TOKEN_KEY_LEN
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+}
+
 pub(super) fn normalize_metadata_tokens(
     tokens: std::collections::HashMap<String, Option<String>>,
 ) -> Result<std::collections::HashMap<String, Option<String>>, String> {
@@ -256,12 +264,7 @@ pub(super) fn normalize_metadata_tokens(
     tokens
         .into_iter()
         .map(|(key, value)| {
-            if key.is_empty()
-                || key.len() > MAX_METADATA_TOKEN_KEY_LEN
-                || !key
-                    .chars()
-                    .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
-            {
+            if !metadata_token_name_is_valid(&key) {
                 return Err(format!("invalid metadata token key: {key}"));
             }
             let value = value.and_then(|value| {

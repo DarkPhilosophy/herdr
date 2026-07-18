@@ -21,7 +21,7 @@ use crate::terminal::{TerminalRuntimeRegistry, WorkingDuration};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const WORKSPACE_SECTION_HEADER_ROWS: u16 = 2;
-const AGENT_PANEL_HEADER_ROWS: u16 = 3;
+pub(super) const AGENT_PANEL_HEADER_ROWS: u16 = 3;
 
 pub(crate) struct AgentPanelEntry {
     pub ws_idx: usize,
@@ -1806,9 +1806,11 @@ pub(crate) fn render_sidebar(
     }
 
     let (ws_area, detail_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+    let layout = super::sidebar_sections::sidebar_sections_layout(app, detail_area);
 
     render_workspace_list(app, terminal_runtimes, frame, ws_area, is_navigating);
-    render_agent_detail(app, terminal_runtimes, frame, detail_area);
+    render_agent_detail(app, terminal_runtimes, frame, layout.agent_area);
+    super::sidebar_sections::render_sidebar_sections(app, frame, layout.sections_area);
     render_sidebar_toggle(app, frame, area, false, p);
 }
 
@@ -2967,13 +2969,12 @@ fn render_sidebar_toggle(
     collapsed: bool,
     p: &Palette,
 ) {
-    // #9: draw the affordance in BOTH modes (it used to early-return when expanded, leaving an
-    // invisible 1×1 hit cell). #58: a single matching guillemet pair, no word — expanded shows `«`
-    // (will collapse), collapsed shows `»` (will expand). ratatui clips the label to the rect.
-    // The collapse glyph occupies the full-width bottom row in both modes; right-aligning the
-    // single guillemet keeps it pinned to the legacy `expanded_sidebar_toggle_rect` cell so the
-    // upstream sidebar-settings hit geometry/tests stay valid.
-    let toggle_area = collapsed_sidebar_toggle_rect(area);
+    // Draw the affordance in both modes. Expanded custom sections reserve their own toggle row.
+    let toggle_area = if collapsed {
+        collapsed_sidebar_toggle_rect(area)
+    } else {
+        super::sidebar_sections::expanded_sidebar_toggle_rect_for_state(app, area)
+    };
     if toggle_area == Rect::default() {
         return;
     }

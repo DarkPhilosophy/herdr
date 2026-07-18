@@ -3841,6 +3841,48 @@
           },
           "type": "object"
         },
+        "SidebarReportSectionParams": {
+          "properties": {
+            "rows": {
+              "items": {
+                "$ref": "#/schemas/request/$defs/SectionRow"
+              },
+              "maxItems": 16,
+              "type": "array"
+            },
+            "section_id": {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            "seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "source": {
+              "type": "string"
+            },
+            "ttl_ms": {
+              "format": "uint64",
+              "maximum": 86400000,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "section_id",
+            "source",
+            "rows"
+          ],
+          "type": "object"
+        },
         "SplitDirection": {
           "enum": [
             "right",
@@ -4878,6 +4920,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/NotificationShowParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "sidebar.report_section",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/SidebarReportSectionParams"
             }
           },
           "required": [

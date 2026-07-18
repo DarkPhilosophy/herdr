@@ -20,7 +20,7 @@ impl AppState {
         }
         let (_, detail_area) =
             crate::ui::expanded_sidebar_sections(sidebar, self.sidebar_section_split);
-        detail_area
+        crate::ui::sidebar_sections_layout(self, detail_area).agent_area
     }
 
     pub(super) fn workspace_list_scrollbar_target_at(
@@ -256,7 +256,7 @@ impl AppState {
         let rect = if self.sidebar_collapsed {
             crate::ui::collapsed_sidebar_toggle_rect(self.view.sidebar_rect)
         } else {
-            crate::ui::expanded_sidebar_toggle_rect(self.view.sidebar_rect)
+            crate::ui::expanded_sidebar_toggle_rect_for_state(self, self.view.sidebar_rect)
         };
         rect.width > 0
             && col >= rect.x
@@ -1486,6 +1486,57 @@ mod tests {
 
         assert!(app.state.sidebar_collapsed);
         assert!(app.state.drag.is_none());
+    }
+
+    #[test]
+    fn custom_section_rows_are_inert_and_move_the_expanded_toggle_above_them() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_sections_config = vec![crate::config::CustomSidebarSectionConfig {
+            id: "build".into(),
+            title: Some("build".into()),
+            max_rows: 6,
+            placement: crate::config::SidebarSectionPlacement::BelowAgents,
+        }];
+        app.state
+            .sidebar_section_reports
+            .report(
+                "build".into(),
+                "test",
+                None,
+                None,
+                vec![crate::api::schema::SectionRow::Spans(vec![
+                    crate::api::schema::SectionSpan {
+                        text: "ready".into(),
+                        color: None,
+                        bold: false,
+                        dim: false,
+                    },
+                ])],
+                std::time::Instant::now(),
+            )
+            .unwrap();
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
+        let old_toggle = crate::ui::expanded_sidebar_toggle_rect(app.state.view.sidebar_rect);
+        let relocated_toggle = crate::ui::expanded_sidebar_toggle_rect_for_state(
+            &app.state,
+            app.state.view.sidebar_rect,
+        );
+        assert!(relocated_toggle.y < old_toggle.y);
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            old_toggle.x,
+            old_toggle.y,
+        ));
+        assert!(!app.state.sidebar_collapsed);
+        assert!(app.state.drag.is_none());
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            relocated_toggle.x,
+            relocated_toggle.y,
+        ));
+        assert!(app.state.sidebar_collapsed);
     }
 
     #[test]

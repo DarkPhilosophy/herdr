@@ -10,6 +10,7 @@ mod panes;
 pub(crate) mod plugins;
 mod remotes;
 mod responses;
+mod sections;
 mod session;
 mod tabs;
 mod workspaces;
@@ -1023,6 +1024,9 @@ impl App {
             Method::SessionList(_) => return self.handle_session_list(request.id),
             Method::NotificationShow(params) => {
                 return self.handle_notification_show(request.id, params);
+            }
+            Method::SidebarReportSection(params) => {
+                return self.handle_sidebar_report_section(request.id, params);
             }
             Method::ClientWindowTitleSet(_) | Method::ClientWindowTitleClear(_) => {
                 return responses::encode_success(

@@ -22,6 +22,7 @@ mod popup;
 mod runtime;
 mod runtime_mutations;
 mod session;
+mod sidebar_sections;
 pub mod state;
 mod tab_bar_status;
 mod terminal_targets;
@@ -659,6 +660,10 @@ impl App {
             agent_panel_sort,
             status_indicators: config.ui.status_indicators,
             agent_view_override: None,
+            sidebar_agents: config.ui.sidebar.agents.clone(),
+            sidebar_spaces: config.ui.sidebar.spaces.clone(),
+            sidebar_sections_config: config.ui.sidebar.resolved_sections(),
+            sidebar_section_reports: sidebar_sections::SidebarSections::default(),
             next_agent_state_change_seq: 0,
             mouse_capture: config.ui.mouse_capture,
             copy_on_select: config.ui.copy_on_select,
@@ -1561,6 +1566,9 @@ impl App {
                 // upstream also re-applies `config.ui.sidebar.agents/.spaces` here; those are the
                 // rejected token-row sidebar (DIVERGENCE.md). mx's sidebar preferences live in
                 // `state.sidebar_space` / `state.sidebar_agent` and are applied elsewhere.
+                self.state.sidebar_agents = config.ui.sidebar.agents.clone();
+                self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
+                self.state.sidebar_sections_config = config.ui.sidebar.resolved_sections();
                 self.state.agent_panel_scroll = 0;
                 // #58: the multi-remote client renders the sidebar from the server-pushed UiSettings,
                 // so a sidebar-config change must signal clients to re-fetch immediately — otherwise
@@ -3245,10 +3253,72 @@ mod tests {
         let mut app = test_app();
         assert!(!app.state.sidebar_collapsed);
 
-        std::fs::write(&path, "[ui]\nsidebar_start_collapsed = true\n").unwrap();
+        std::fs::write(
+            &path,
+            r#"[ui.sidebar.agents]
+rows = [["state_icon", "$summary"]]
+row_gap = 1
+
+[ui.sidebar.agents.rows_by_agent]
+claude = [["terminal_title_stripped"]]
+
+[ui.sidebar.spaces]
+rows = [["workspace", "$jj_status"]]
+row_gap = 3
+
+[[ui.sidebar.sections]]
+id = "build"
+title = "Build"
+max_rows = 4
+placement = "below_agents"
+"#,
+        )
+        .unwrap();
+        app.state.agent_panel_scroll = 5;
         let report = app.reload_config();
         assert_eq!(report.status, crate::config::ConfigReloadStatus::Applied);
-        assert!(!app.state.sidebar_collapsed);
+        assert_eq!(app.state.agent_panel_scroll, 0);
+        assert_eq!(
+            app.state.sidebar_agents.rows,
+            vec![vec![
+                crate::config::AgentSidebarToken::StateIcon,
+                crate::config::AgentSidebarToken::Custom("summary".into()),
+            ]]
+        );
+        assert_eq!(
+            app.state.sidebar_agents.rows_by_agent["claude"],
+            vec![vec![
+                crate::config::AgentSidebarToken::TerminalTitleStripped,
+            ]]
+        );
+        assert_eq!(app.state.sidebar_agents.row_gap, 1);
+        assert_eq!(
+            app.state.sidebar_spaces.rows,
+            vec![vec![
+                crate::config::SpaceSidebarToken::Workspace,
+                crate::config::SpaceSidebarToken::Custom("jj_status".into()),
+            ]]
+        );
+        assert_eq!(app.state.sidebar_spaces.row_gap, 3);
+        assert_eq!(
+            app.state.sidebar_sections_config,
+            vec![crate::config::CustomSidebarSectionConfig {
+                id: "build".into(),
+                title: Some("Build".into()),
+                max_rows: 4,
+                placement: crate::config::SidebarSectionPlacement::BelowAgents,
+            }]
+        );
+
+        let previous_agents = app.state.sidebar_agents.clone();
+        std::fs::write(
+            &path,
+            "[ui.sidebar.agents]\nrows = [[\"agent\"]]\n\n[ui.sidebar.agents.rows_by_agent]\nclaude-code = [[\"terminal_title\"]]\n",
+        )
+        .unwrap();
+        let report = app.reload_config();
+        assert_eq!(report.status, crate::config::ConfigReloadStatus::Partial);
+        assert_eq!(app.state.sidebar_agents, previous_agents);
 
         std::env::remove_var(crate::config::CONFIG_PATH_ENV_VAR);
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
