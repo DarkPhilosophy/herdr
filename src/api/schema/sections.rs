@@ -41,6 +41,9 @@ pub struct SectionBar {
     /// Left-aligned title rendered before the bar cells.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Color for the title. Uses the span color grammar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
     /// Uniform color for filled cells. Uses the span color grammar; when
@@ -85,6 +88,7 @@ mod tests {
                     {"bar": {
                         "fraction": 0.5,
                         "title": "queue",
+                        "title_color": "peach",
                         "label": "5/10",
                         "fill": "#123456",
                         "empty": "subtext0"
@@ -118,12 +122,38 @@ mod tests {
                     bar: SectionBar {
                         fraction: 0.5,
                         title: Some("queue".into()),
+                        title_color: Some("peach".into()),
                         label: Some("5/10".into()),
                         fill: Some("#123456".into()),
                         empty: Some("subtext0".into()),
                     },
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn report_section_request_parses_blank_spans_row_without_right_cluster() {
+        let request: crate::api::schema::Request = serde_json::from_value(serde_json::json!({
+            "id": "req",
+            "method": "sidebar.report_section",
+            "params": {
+                "section_id": "usage",
+                "source": "test:usage",
+                "rows": [{"spans": []}]
+            }
+        }))
+        .unwrap();
+        let crate::api::schema::Method::SidebarReportSection(params) = request.method else {
+            panic!("wrong method");
+        };
+
+        assert_eq!(
+            params.rows,
+            vec![SectionRow::Spans {
+                spans: Vec::new(),
+                right: Vec::new(),
+            }]
         );
     }
 }

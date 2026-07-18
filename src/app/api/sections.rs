@@ -102,6 +102,7 @@ fn normalize_section_rows(
                     title: bar.title.as_deref().and_then(|title| {
                         super::sanitized_notification_text(title, MAX_SECTION_TEXT_CHARS)
                     }),
+                    title_color: normalize_section_color(bar.title_color)?,
                     label: bar.label.as_deref().and_then(|label| {
                         super::sanitized_notification_text(label, MAX_SECTION_TEXT_CHARS)
                     }),
@@ -308,6 +309,7 @@ mod tests {
                     bar: SectionBar {
                         fraction: 0.5,
                         title: None,
+                        title_color: None,
                         label: None,
                         fill: Some("cyan".into()),
                         empty: None,
@@ -317,6 +319,76 @@ mod tests {
         );
         let error: ErrorResponse = serde_json::from_str(&response).unwrap();
         assert_eq!(error.error.code, "invalid_sidebar_section_color");
+    }
+
+    #[test]
+    fn report_section_accepts_named_and_rgb_title_colors_and_rejects_invalid() {
+        let mut app = test_app();
+        for (section_id, color) in [("named", "peach"), ("rgb", "#ff9f52")] {
+            let response = app.handle_sidebar_report_section(
+                section_id.into(),
+                params(
+                    section_id,
+                    vec![SectionRow::Bar {
+                        bar: SectionBar {
+                            fraction: 0.5,
+                            title: Some("usage".into()),
+                            title_color: Some(color.into()),
+                            label: None,
+                            fill: None,
+                            empty: None,
+                        },
+                    }],
+                ),
+            );
+            let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+            assert_eq!(success.result, ResponseResult::Ok {});
+            let Some(SectionRow::Bar { bar }) = app
+                .state
+                .sidebar_section_reports
+                .rows(section_id)
+                .and_then(|rows| rows.first())
+            else {
+                panic!("stored bar row");
+            };
+            assert_eq!(bar.title_color.as_deref(), Some(color));
+        }
+
+        let response = app.handle_sidebar_report_section(
+            "invalid".into(),
+            params(
+                "invalid",
+                vec![SectionRow::Bar {
+                    bar: SectionBar {
+                        fraction: 0.5,
+                        title: Some("usage".into()),
+                        title_color: Some("cyan".into()),
+                        label: None,
+                        fill: None,
+                        empty: None,
+                    },
+                }],
+            ),
+        );
+        let error: ErrorResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(error.error.code, "invalid_sidebar_section_color");
+    }
+
+    #[test]
+    fn report_section_accepts_blank_spans_row() {
+        let mut app = test_app();
+        let blank = SectionRow::Spans {
+            spans: Vec::new(),
+            right: Vec::new(),
+        };
+        let response =
+            app.handle_sidebar_report_section("blank".into(), params("blank", vec![blank.clone()]));
+        let success: SuccessResponse = serde_json::from_str(&response).unwrap();
+        assert_eq!(success.result, ResponseResult::Ok {});
+        assert_eq!(
+            app.state.sidebar_section_reports.rows("blank"),
+            Some([blank].as_slice())
+        );
     }
 
     #[test]
@@ -345,6 +417,7 @@ mod tests {
                         bar: SectionBar {
                             fraction: 2.0,
                             title: Some("  mum\n 5h  ".into()),
+                            title_color: None,
                             label: Some("  10\n jobs  ".into()),
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
@@ -354,6 +427,7 @@ mod tests {
                         bar: SectionBar {
                             fraction: -1.0,
                             title: None,
+                            title_color: None,
                             label: None,
                             fill: None,
                             empty: None,
@@ -386,6 +460,7 @@ mod tests {
                         bar: SectionBar {
                             fraction: 1.0,
                             title: Some("mum 5h".into()),
+                            title_color: None,
                             label: Some("10 jobs".into()),
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
@@ -395,6 +470,7 @@ mod tests {
                         bar: SectionBar {
                             fraction: 0.0,
                             title: None,
+                            title_color: None,
                             label: None,
                             fill: None,
                             empty: None,
