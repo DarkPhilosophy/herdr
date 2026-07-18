@@ -988,6 +988,87 @@ mod tests {
     }
 
     #[test]
+    fn grid_padded_bar_labels_share_terminal_columns() {
+        let labels = [
+            "  5% \u{21bb}    30m",
+            " 42% \u{21bb}  4h29m",
+            "100% \u{21bb} 13h39m",
+        ];
+        let rows = labels
+            .iter()
+            .enumerate()
+            .map(|(index, label)| SectionRow::Bar {
+                bar: SectionBar {
+                    fraction: (index + 1) as f64 / labels.len() as f64,
+                    title: None,
+                    title_color: None,
+                    label: Some((*label).into()),
+                    fill: None,
+                    empty: None,
+                },
+            })
+            .collect::<Vec<_>>();
+        let label_width = display_width_u16(labels[0]);
+        assert!(labels
+            .iter()
+            .all(|label| display_width_u16(label) == label_width));
+
+        let mut app = AppState::test_new();
+        app.sidebar_sections_config = vec![config("usage", None, 3)];
+        report(&mut app, "usage", rows);
+
+        let area = Rect::new(0, 0, 36, 8);
+        let layout = sidebar_sections_layout(&app, area);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar_sections(&app, frame, layout.sections_area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let label_start = area.width - label_width;
+        let metrics = labels
+            .iter()
+            .enumerate()
+            .map(|(index, expected)| {
+                let row = layout.sections_area.y + index as u16 + 1;
+                let rendered = (label_start..area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>();
+                assert_eq!(rendered, *expected);
+
+                let percent = (label_start..area.width)
+                    .find(|column| buffer[(*column, row)].symbol() == "%")
+                    .expect("percentage glyph");
+                let arrow = (label_start..area.width)
+                    .find(|column| buffer[(*column, row)].symbol() == "\u{21bb}")
+                    .expect("reset glyph");
+                assert_eq!(
+                    buffer[(arrow + 1, row)].symbol(),
+                    " ",
+                    "reset glyph has a separating cell"
+                );
+                let countdown_start = (arrow + 2..area.width)
+                    .find(|column| buffer[(*column, row)].symbol() != " ")
+                    .expect("countdown");
+                let countdown_end = (label_start..area.width)
+                    .rev()
+                    .find(|column| buffer[(*column, row)].symbol() != " ")
+                    .expect("countdown end");
+                assert_eq!(countdown_end, area.width - 1);
+                (percent, arrow, countdown_start, countdown_end)
+            })
+            .collect::<Vec<_>>();
+
+        assert!(metrics
+            .windows(2)
+            .all(|rows| rows[0].0 == rows[1].0 && rows[0].1 == rows[1].1));
+        assert!(metrics
+            .iter()
+            .all(|(_, arrow, countdown_start, _)| countdown_start >= &(arrow + 2)));
+        assert_eq!(metrics[2].2, metrics[2].1 + 2);
+        assert!(metrics.windows(2).all(|rows| rows[0].3 == rows[1].3));
+    }
+
+    #[test]
     fn bar_titles_resolve_named_and_rgb_colors() {
         let rows = [
             SectionRow::Bar {

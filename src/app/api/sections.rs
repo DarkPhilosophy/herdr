@@ -99,19 +99,29 @@ fn normalize_section_rows(
             SectionRow::Bar { bar } => Ok(SectionRow::Bar {
                 bar: SectionBar {
                     fraction: bar.fraction.clamp(0.0, 1.0),
-                    title: bar.title.as_deref().and_then(|title| {
-                        super::sanitized_notification_text(title, MAX_SECTION_TEXT_CHARS)
-                    }),
+                    title: bar.title.as_deref().and_then(normalize_bar_layout_text),
                     title_color: normalize_section_color(bar.title_color)?,
-                    label: bar.label.as_deref().and_then(|label| {
-                        super::sanitized_notification_text(label, MAX_SECTION_TEXT_CHARS)
-                    }),
+                    label: bar.label.as_deref().and_then(normalize_bar_layout_text),
                     fill: normalize_section_color(bar.fill)?,
                     empty: normalize_section_color(bar.empty)?,
                 },
             }),
         })
         .collect()
+}
+
+/// Bar titles and labels are column-layout-bearing: publishers align grids
+/// with deliberate padding, so preserve whitespace while removing controls.
+fn normalize_bar_layout_text(text: &str) -> Option<String> {
+    let normalized = text
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(MAX_SECTION_TEXT_CHARS)
+        .collect::<String>();
+    normalized
+        .chars()
+        .any(|ch| !ch.is_whitespace())
+        .then_some(normalized)
 }
 
 fn normalize_section_spans(
@@ -392,6 +402,67 @@ mod tests {
     }
 
     #[test]
+    fn bar_layout_text_preserves_padding_strips_controls_and_drops_blanks() {
+        let rows = normalize_section_rows(vec![
+            SectionRow::Bar {
+                bar: SectionBar {
+                    fraction: 0.05,
+                    title: Some("  leading title".into()),
+                    title_color: None,
+                    label: Some("  5% \u{21bb}  30m".into()),
+                    fill: None,
+                    empty: None,
+                },
+            },
+            SectionRow::Bar {
+                bar: SectionBar {
+                    fraction: 0.42,
+                    title: Some("mu\nm\t 5h".into()),
+                    title_color: None,
+                    label: Some("  4\n2%\t \u{21bb} 30m".into()),
+                    fill: None,
+                    empty: None,
+                },
+            },
+            SectionRow::Bar {
+                bar: SectionBar {
+                    fraction: 1.0,
+                    title: Some(" \t\n ".into()),
+                    title_color: None,
+                    label: Some("\t \n".into()),
+                    fill: None,
+                    empty: None,
+                },
+            },
+        ])
+        .unwrap();
+
+        let SectionRow::Bar { bar: padded } = &rows[0] else {
+            panic!("padded bar");
+        };
+        assert_eq!(padded.title.as_deref(), Some("  leading title"));
+        assert_eq!(padded.label.as_deref(), Some("  5% \u{21bb}  30m"));
+
+        let SectionRow::Bar { bar: stripped } = &rows[1] else {
+            panic!("control-stripped bar");
+        };
+        assert_eq!(stripped.title.as_deref(), Some("mum 5h"));
+        assert_eq!(stripped.label.as_deref(), Some("  42% \u{21bb} 30m"));
+
+        let SectionRow::Bar { bar: blank } = &rows[2] else {
+            panic!("blank bar");
+        };
+        assert_eq!(blank.title, None);
+        assert_eq!(blank.label, None);
+
+        let overlong = format!("\n{}tail", "x".repeat(MAX_SECTION_TEXT_CHARS));
+        assert_eq!(
+            normalize_bar_layout_text(&overlong),
+            Some("x".repeat(MAX_SECTION_TEXT_CHARS))
+        );
+    }
+
+    #[test]
     fn report_section_sanitizes_text_clamps_bars_and_returns_ok() {
         let mut app = test_app();
         let response = app.handle_api_request(Request {
@@ -459,9 +530,9 @@ mod tests {
                     SectionRow::Bar {
                         bar: SectionBar {
                             fraction: 1.0,
-                            title: Some("mum 5h".into()),
+                            title: Some("  mum 5h  ".into()),
                             title_color: None,
-                            label: Some("10 jobs".into()),
+                            label: Some("  10 jobs  ".into()),
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
                         },
