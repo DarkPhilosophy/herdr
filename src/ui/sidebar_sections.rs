@@ -170,7 +170,7 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
             }
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    format!(" {} ", title.to_uppercase()),
+                    format!(" {} ", title),
                     Style::default()
                         .fg(app.palette.overlay0)
                         .add_modifier(Modifier::BOLD)
@@ -762,7 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn section_with_title_uppercases_header_and_caps_rows_with_overflow() {
+    fn section_with_title_renders_verbatim_header_and_caps_rows_with_overflow() {
         let mut app = AppState::test_new();
         app.workspaces = (1..=6)
             .map(|index| Workspace::test_new(&format!("agent-{index}")))
@@ -830,9 +830,9 @@ mod tests {
                 layout.sections_area.y + 1,
                 layout.sections_area.width
             ),
-            " BUILD STATUS"
+            " build status"
         );
-        let title_separator_x = layout.sections_area.x + display_width_u16(" BUILD STATUS");
+        let title_separator_x = layout.sections_area.x + display_width_u16(" build status");
         assert_eq!(
             buffer[(title_separator_x, layout.sections_area.y + 1)].symbol(),
             " "
