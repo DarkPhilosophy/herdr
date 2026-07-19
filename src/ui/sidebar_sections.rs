@@ -91,9 +91,11 @@ pub(crate) fn spaces_agents_divider_rect(app: &AppState, area: Rect) -> Rect {
 
 pub(crate) fn sidebar_sections_divider_rect(app: &AppState, area: Rect) -> Rect {
     let sections = sidebar_regions_layout(app, area).sections_area;
-    (sections.height > 0)
-        .then_some(Rect::new(sections.x, sections.y, sections.width, 1))
-        .unwrap_or_default()
+    if sections.height > 0 {
+        Rect::new(sections.x, sections.y, sections.width, 1)
+    } else {
+        Rect::default()
+    }
 }
 
 fn configured_section_height(app: &AppState, config: &CustomSidebarSectionConfig) -> u16 {
@@ -102,7 +104,8 @@ fn configured_section_height(app: &AppState, config: &CustomSidebarSectionConfig
             .sidebar_section_reports
             .rows(&config.id)
             .map(|rows| {
-                (rows.len().min(config.max_rows as usize) as u16)
+                let (_, body) = split_header_row(config, rows);
+                (body.len().min(config.max_rows as usize) as u16)
                     .saturating_add(1)
                     .saturating_add(u16::from(config.title.is_some()))
             })
@@ -115,6 +118,32 @@ fn focused_pane_token<'a>(app: &'a AppState, key: &str) -> Option<&'a str> {
     let pane_id = workspace.focused_pane_id()?;
     let terminal_id = workspace.terminal_id(pane_id)?;
     app.terminals.get(terminal_id)?.metadata_tokens.get(key)
+}
+
+/// A leading spans row with no visible left content and a non-empty right
+/// cluster is hoisted onto the section's title row when the section has a
+/// title: the cluster renders right-aligned beside the title instead of
+/// occupying the first body line. Publishers use this to pin compact status
+/// (e.g. a refresh countdown) into the header without spending a row.
+fn split_header_row<'a>(
+    config: &CustomSidebarSectionConfig,
+    rows: &'a [SectionRow],
+) -> (Option<&'a [SectionSpan]>, &'a [SectionRow]) {
+    if config.title.is_none() {
+        return (None, rows);
+    }
+    match rows.split_first() {
+        Some((SectionRow::Spans { spans, right }, body))
+            if !right.is_empty() && !spans_have_content(spans) =>
+        {
+            (Some(right.as_slice()), body)
+        }
+        _ => (None, rows),
+    }
+}
+
+fn spans_have_content(spans: &[SectionSpan]) -> bool {
+    spans.iter().any(|span| display_width_u16(&span.text) > 0)
 }
 
 pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: Rect) {
@@ -132,16 +161,20 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
     let total_live_rows = app
         .sidebar_sections_config
         .iter()
-        .filter_map(|config| app.sidebar_section_reports.rows(&config.id))
-        .map(<[SectionRow]>::len)
+        .filter_map(|config| {
+            app.sidebar_section_reports
+                .rows(&config.id)
+                .map(|rows| split_header_row(config, rows).1.len())
+        })
         .sum::<usize>();
     let mut represented_rows = 0usize;
     let mut row_y = area.y;
 
     'sections: for config in &app.sidebar_sections_config {
-        let Some(rows) = app.sidebar_section_reports.rows(&config.id) else {
+        let Some(all_rows) = app.sidebar_section_reports.rows(&config.id) else {
             continue;
         };
+        let (header_right, rows) = split_header_row(config, all_rows);
         let max_rows = config.max_rows as usize;
         let capped = rows.len() > max_rows;
         let content_rows = if capped {
@@ -168,15 +201,12 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
             if remaining == 0 {
                 break;
             }
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    format!(" {} ", title),
-                    Style::default()
-                        .fg(app.palette.overlay0)
-                        .add_modifier(Modifier::BOLD)
-                        .add_modifier(Modifier::DIM),
-                )),
+            render_section_title(
+                frame,
                 Rect::new(area.x, row_y, area.width, 1),
+                title,
+                header_right,
+                &app.palette,
             );
             row_y = row_y.saturating_add(1);
             remaining = remaining.saturating_sub(1);
@@ -308,6 +338,49 @@ fn render_section_row(
     }
 }
 
+/// Section title line: title left in the native header style (matching the
+/// spaces/agents headers), optional hoisted status cluster right-aligned.
+fn render_section_title(
+    frame: &mut Frame,
+    area: Rect,
+    title: &str,
+    right: Option<&[SectionSpan]>,
+    palette: &Palette,
+) {
+    let right = right.unwrap_or_default();
+    let right_width = right
+        .iter()
+        .map(|span| display_width_u16(&span.text))
+        .fold(0u16, u16::saturating_add)
+        .min(area.width);
+    let gap = u16::from(right_width > 0 && area.width > right_width);
+    let title_width = area.width.saturating_sub(right_width.saturating_add(gap));
+    if title_width > 0 {
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                format!(" {} ", title),
+                Style::default()
+                    .fg(palette.overlay0)
+                    .add_modifier(Modifier::BOLD),
+            )),
+            Rect::new(area.x, area.y, title_width, 1),
+        );
+    }
+    if right_width > 0 {
+        frame.render_widget(
+            Paragraph::new(Line::from(styled_spans(right, palette, palette.text)))
+                .alignment(Alignment::Right),
+            Rect::new(
+                area.x
+                    .saturating_add(area.width.saturating_sub(right_width)),
+                area.y,
+                right_width,
+                1,
+            ),
+        );
+    }
+}
+
 fn render_spans(
     frame: &mut Frame,
     area: Rect,
@@ -320,7 +393,7 @@ fn render_spans(
         .map(|span| display_width_u16(&span.text))
         .fold(0u16, u16::saturating_add)
         .min(area.width);
-    let left_has_content = spans.iter().any(|span| display_width_u16(&span.text) > 0);
+    let left_has_content = spans_have_content(spans);
     if !left_has_content && right_width == 0 {
         let buffer = frame.buffer_mut();
         for x in area.x..area.x.saturating_add(area.width) {
@@ -762,6 +835,107 @@ mod tests {
     }
 
     #[test]
+    fn leading_right_only_row_hoists_onto_titled_header() {
+        let mut app = AppState::test_new();
+        app.sidebar_sections_config = vec![config("usage", Some("usage"), 18)];
+        let status = SectionRow::Spans {
+            spans: Vec::new(),
+            right: vec![SectionSpan {
+                text: "\u{21bb} 4m \u{b7} prefix+u".into(),
+                color: None,
+                bold: false,
+                dim: true,
+            }],
+        };
+        report(
+            &mut app,
+            "usage",
+            vec![
+                status,
+                SectionRow::Spans {
+                    spans: Vec::new(),
+                    right: Vec::new(),
+                },
+                span_row("acct row"),
+                bar_row(),
+            ],
+        );
+
+        let area = Rect::new(0, 0, 26, 8);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar_sections(&app, frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        // Row 0 divider, row 1 title + hoisted cluster, row 2 blank spacer,
+        // row 3 first usage row: the hoisted row spends no body line.
+        let title_row = row_text(buffer, 1, area.width);
+        assert!(title_row.starts_with(" usage"), "{title_row}");
+        assert!(
+            title_row.ends_with("\u{21bb} 4m \u{b7} prefix+u"),
+            "{title_row}"
+        );
+        let title_style = buffer[(1u16, 1u16)].style();
+        assert_eq!(title_style.fg, Some(app.palette.overlay0));
+        assert!(title_style.add_modifier.contains(Modifier::BOLD));
+        assert!(!title_style.add_modifier.contains(Modifier::DIM));
+        let cluster_style = buffer[(area.width - 1, 1u16)].style();
+        assert!(cluster_style.add_modifier.contains(Modifier::DIM));
+        assert!(!cluster_style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(row_text(buffer, 2, area.width), "");
+        assert_eq!(row_text(buffer, 3, area.width), "acct row");
+        assert_ne!(row_text(buffer, 4, area.width), "");
+
+        // Heights count body rows only; the cap compares against body length.
+        assert_eq!(
+            configured_section_height(&app, &config("usage", Some("usage"), 18)),
+            5
+        );
+        assert_eq!(
+            configured_section_height(&app, &config("usage", Some("usage"), 2)),
+            4
+        );
+    }
+
+    #[test]
+    fn right_only_first_row_stays_in_body_without_title() {
+        let mut app = AppState::test_new();
+        app.sidebar_sections_config = vec![config("usage", None, 18)];
+        report(
+            &mut app,
+            "usage",
+            vec![
+                SectionRow::Spans {
+                    spans: Vec::new(),
+                    right: vec![SectionSpan {
+                        text: "\u{21bb} 4m".into(),
+                        color: None,
+                        bold: false,
+                        dim: true,
+                    }],
+                },
+                span_row("body"),
+            ],
+        );
+
+        let area = Rect::new(0, 0, 20, 5);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar_sections(&app, frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        // No title: the right-only row is an ordinary body row after the divider.
+        assert!(row_text(buffer, 1, area.width).ends_with("\u{21bb} 4m"));
+        assert_eq!(row_text(buffer, 2, area.width), "body");
+        assert_eq!(
+            configured_section_height(&app, &config("usage", None, 18)),
+            3
+        );
+    }
+
+    #[test]
     fn section_with_title_renders_verbatim_header_and_caps_rows_with_overflow() {
         let mut app = AppState::test_new();
         app.workspaces = (1..=6)
@@ -840,11 +1014,11 @@ mod tests {
         let separator_style = buffer[(title_separator_x, layout.sections_area.y + 1)].style();
         assert_eq!(separator_style.fg, Some(app.palette.overlay0));
         assert!(separator_style.add_modifier.contains(Modifier::BOLD));
-        assert!(separator_style.add_modifier.contains(Modifier::DIM));
+        assert!(!separator_style.add_modifier.contains(Modifier::DIM));
         let title_style = buffer[(layout.sections_area.x + 1, layout.sections_area.y + 1)].style();
         assert_eq!(title_style.fg, Some(app.palette.overlay0));
         assert!(title_style.add_modifier.contains(Modifier::BOLD));
-        assert!(title_style.add_modifier.contains(Modifier::DIM));
+        assert!(!title_style.add_modifier.contains(Modifier::DIM));
         assert!(!buffer[(title_separator_x + 1, layout.sections_area.y + 1)]
             .style()
             .add_modifier
