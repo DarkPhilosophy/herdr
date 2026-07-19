@@ -41,6 +41,11 @@ pub struct SectionBar {
     /// Left-aligned title rendered before the bar cells.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Styled left-aligned title fragments. When present, these override
+    /// `title` and `title_color`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 8))]
+    pub title_spans: Option<Vec<SectionSpan>>,
     /// Color for the title. Uses the span color grammar.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title_color: Option<String>,
@@ -88,6 +93,10 @@ mod tests {
                     {"bar": {
                         "fraction": 0.5,
                         "title": "queue",
+                        "title_spans": [
+                            {"text": "qu* ", "color": "peach", "dim": true},
+                            {"text": "5h", "color": "peach"}
+                        ],
                         "title_color": "peach",
                         "label": "5/10",
                         "fill": "#123456",
@@ -122,6 +131,20 @@ mod tests {
                     bar: SectionBar {
                         fraction: 0.5,
                         title: Some("queue".into()),
+                        title_spans: Some(vec![
+                            SectionSpan {
+                                text: "qu* ".into(),
+                                color: Some("peach".into()),
+                                bold: false,
+                                dim: true,
+                            },
+                            SectionSpan {
+                                text: "5h".into(),
+                                color: Some("peach".into()),
+                                bold: false,
+                                dim: false,
+                            },
+                        ]),
                         title_color: Some("peach".into()),
                         label: Some("5/10".into()),
                         fill: Some("#123456".into()),

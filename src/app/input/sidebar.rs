@@ -623,17 +623,20 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
+    use std::{fs, time::Instant};
 
     use crossterm::event::{MouseButton, MouseEventKind};
     use ratatui::layout::Rect;
 
     use super::super::{app_for_mouse_test, capture_snapshot, mouse, unique_temp_path};
     use crate::{
+        api::schema::SectionRow,
         app::state::{
             AgentPanelScope, AgentPanelSort, AppState, DragTarget, Mode, SidebarAgentItem,
         },
-        config::SidebarCollapsedModeConfig,
+        config::{
+            CustomSidebarSectionConfig, SidebarCollapsedModeConfig, SidebarSectionPlacement,
+        },
         detect::{Agent, AgentState},
         workspace::Workspace,
     };
@@ -2138,6 +2141,60 @@ mod tests {
             snapshot.sidebar_section_split,
             Some(app.state.sidebar_section_split)
         );
+    }
+
+    #[test]
+    fn dragging_custom_section_divider_is_inert() {
+        let mut app = app_for_mouse_test();
+        app.state.sidebar_sections_config = vec![CustomSidebarSectionConfig {
+            id: "usage".into(),
+            title: Some("usage".into()),
+            max_rows: 3,
+            placement: SidebarSectionPlacement::BelowAgents,
+        }];
+        assert_eq!(
+            app.state.sidebar_section_reports.report(
+                "usage".into(),
+                "test",
+                None,
+                None,
+                vec![SectionRow::Spans {
+                    spans: Vec::new(),
+                    right: Vec::new(),
+                }],
+                Instant::now(),
+            ),
+            Ok(true)
+        );
+        crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 32));
+        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
+            app.state.view.sidebar_rect,
+            app.state.sidebar_section_split,
+        );
+        let before = crate::ui::sidebar_sections_layout(&app.state, detail_area);
+        let divider_row = before.sections_area.y;
+        let original_split = app.state.sidebar_section_split;
+
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            before.sections_area.x + 1,
+            divider_row,
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            before.sections_area.x + 1,
+            divider_row.saturating_sub(3),
+        ));
+
+        assert!(app.state.drag.is_none());
+        assert_eq!(app.state.sidebar_section_split, original_split);
+        let (_, detail_area_after) = crate::ui::expanded_sidebar_sections(
+            app.state.view.sidebar_rect,
+            app.state.sidebar_section_split,
+        );
+        let after = crate::ui::sidebar_sections_layout(&app.state, detail_area_after);
+        assert_eq!(after.agent_area.height, before.agent_area.height);
+        assert_eq!(after.sections_area.height, before.sections_area.height);
     }
 
     #[test]

@@ -100,6 +100,7 @@ fn normalize_section_rows(
                 bar: SectionBar {
                     fraction: bar.fraction.clamp(0.0, 1.0),
                     title: bar.title.as_deref().and_then(normalize_bar_layout_text),
+                    title_spans: bar.title_spans.map(normalize_bar_title_spans).transpose()?,
                     title_color: normalize_section_color(bar.title_color)?,
                     label: bar.label.as_deref().and_then(normalize_bar_layout_text),
                     fill: normalize_section_color(bar.fill)?,
@@ -110,8 +111,9 @@ fn normalize_section_rows(
         .collect()
 }
 
-/// Bar titles and labels are column-layout-bearing: publishers align grids
-/// with deliberate padding, so preserve whitespace while removing controls.
+/// Bar titles, title spans, and labels are column-layout-bearing: publishers
+/// align grids with deliberate padding, so preserve whitespace while removing
+/// controls.
 fn normalize_bar_layout_text(text: &str) -> Option<String> {
     let normalized = text
         .chars()
@@ -122,6 +124,29 @@ fn normalize_bar_layout_text(text: &str) -> Option<String> {
         .chars()
         .any(|ch| !ch.is_whitespace())
         .then_some(normalized)
+}
+
+fn normalize_bar_title_spans(
+    spans: Vec<SectionSpan>,
+) -> Result<Vec<SectionSpan>, (&'static str, String)> {
+    if spans.len() > MAX_SECTION_SPANS {
+        return Err((
+            "invalid_sidebar_section_spans",
+            format!("a sidebar bar title may contain at most {MAX_SECTION_SPANS} spans"),
+        ));
+    }
+
+    spans
+        .into_iter()
+        .map(|span| {
+            Ok(SectionSpan {
+                text: normalize_bar_layout_text(&span.text).unwrap_or_default(),
+                color: normalize_section_color(span.color)?,
+                bold: span.bold,
+                dim: span.dim,
+            })
+        })
+        .collect()
 }
 
 fn normalize_section_spans(
@@ -319,6 +344,7 @@ mod tests {
                     bar: SectionBar {
                         fraction: 0.5,
                         title: None,
+                        title_spans: None,
                         title_color: None,
                         label: None,
                         fill: Some("cyan".into()),
@@ -343,6 +369,7 @@ mod tests {
                         bar: SectionBar {
                             fraction: 0.5,
                             title: Some("usage".into()),
+                            title_spans: None,
                             title_color: Some(color.into()),
                             label: None,
                             fill: None,
@@ -372,6 +399,7 @@ mod tests {
                     bar: SectionBar {
                         fraction: 0.5,
                         title: Some("usage".into()),
+                        title_spans: None,
                         title_color: Some("cyan".into()),
                         label: None,
                         fill: None,
@@ -408,6 +436,20 @@ mod tests {
                 bar: SectionBar {
                     fraction: 0.05,
                     title: Some("  leading title".into()),
+                    title_spans: Some(vec![
+                        SectionSpan {
+                            text: " al*\n ".into(),
+                            color: Some("#ff9f52".into()),
+                            bold: false,
+                            dim: true,
+                        },
+                        SectionSpan {
+                            text: "7d\t fa".into(),
+                            color: Some("#ff9f52".into()),
+                            bold: false,
+                            dim: false,
+                        },
+                    ]),
                     title_color: None,
                     label: Some("  5% \u{21bb}  30m".into()),
                     fill: None,
@@ -418,6 +460,7 @@ mod tests {
                 bar: SectionBar {
                     fraction: 0.42,
                     title: Some("mu\nm\t 5h".into()),
+                    title_spans: None,
                     title_color: None,
                     label: Some("  4\n2%\t \u{21bb} 30m".into()),
                     fill: None,
@@ -428,6 +471,7 @@ mod tests {
                 bar: SectionBar {
                     fraction: 1.0,
                     title: Some(" \t\n ".into()),
+                    title_spans: None,
                     title_color: None,
                     label: Some("\t \n".into()),
                     fill: None,
@@ -442,6 +486,12 @@ mod tests {
         };
         assert_eq!(padded.title.as_deref(), Some("  leading title"));
         assert_eq!(padded.label.as_deref(), Some("  5% \u{21bb}  30m"));
+        let title_spans = padded.title_spans.as_deref().expect("styled title");
+        assert_eq!(title_spans[0].text, " al* ");
+        assert_eq!(title_spans[0].color.as_deref(), Some("#ff9f52"));
+        assert!(title_spans[0].dim);
+        assert_eq!(title_spans[1].text, "7d fa");
+        assert!(!title_spans[1].dim);
 
         let SectionRow::Bar { bar: stripped } = &rows[1] else {
             panic!("control-stripped bar");
@@ -460,6 +510,30 @@ mod tests {
             normalize_bar_layout_text(&overlong),
             Some("x".repeat(MAX_SECTION_TEXT_CHARS))
         );
+
+        let too_many = normalize_bar_title_spans(
+            std::iter::repeat_n(
+                SectionSpan {
+                    text: "x".into(),
+                    color: None,
+                    bold: false,
+                    dim: false,
+                },
+                MAX_SECTION_SPANS + 1,
+            )
+            .collect(),
+        )
+        .unwrap_err();
+        assert_eq!(too_many.0, "invalid_sidebar_section_spans");
+
+        let invalid_color = normalize_bar_title_spans(vec![SectionSpan {
+            text: "x".into(),
+            color: Some("cyan".into()),
+            bold: false,
+            dim: false,
+        }])
+        .unwrap_err();
+        assert_eq!(invalid_color.0, "invalid_sidebar_section_color");
     }
 
     #[test]
@@ -488,6 +562,7 @@ mod tests {
                         bar: SectionBar {
                             fraction: 2.0,
                             title: Some("  mum\n 5h  ".into()),
+                            title_spans: None,
                             title_color: None,
                             label: Some("  10\n jobs  ".into()),
                             fill: Some("green".into()),
@@ -498,6 +573,7 @@ mod tests {
                         bar: SectionBar {
                             fraction: -1.0,
                             title: None,
+                            title_spans: None,
                             title_color: None,
                             label: None,
                             fill: None,
@@ -531,6 +607,7 @@ mod tests {
                         bar: SectionBar {
                             fraction: 1.0,
                             title: Some("  mum 5h  ".into()),
+                            title_spans: None,
                             title_color: None,
                             label: Some("  10 jobs  ".into()),
                             fill: Some("green".into()),
@@ -541,6 +618,7 @@ mod tests {
                         bar: SectionBar {
                             fraction: 0.0,
                             title: None,
+                            title_spans: None,
                             title_color: None,
                             label: None,
                             fill: None,

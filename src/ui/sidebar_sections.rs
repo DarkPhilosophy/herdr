@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::api::schema::{SectionRow, SectionSpan};
+use crate::api::schema::{SectionBar, SectionRow, SectionSpan};
 use crate::app::state::{AppState, Palette};
 use crate::config::{CustomSidebarSectionConfig, SidebarSectionPlacement};
 
@@ -129,7 +129,7 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
             }
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    format!(" {}", title.to_uppercase()),
+                    format!(" {title} "),
                     Style::default()
                         .fg(app.palette.overlay0)
                         .add_modifier(Modifier::BOLD)
@@ -224,6 +224,7 @@ fn render_section_row(
             area,
             bar.fraction,
             bar.title.as_deref(),
+            bar.title_spans.as_deref(),
             bar.title_color.as_deref(),
             bar.label.as_deref(),
             bar.fill.as_deref(),
@@ -277,20 +278,65 @@ fn render_spans(
     }
 }
 
+fn section_span_style(span: &SectionSpan, palette: &Palette) -> Style {
+    let mut style = Style::default().fg(section_color(span.color.as_deref(), palette));
+    if span.bold {
+        style = style.add_modifier(Modifier::BOLD);
+    }
+    if span.dim {
+        style = style.add_modifier(Modifier::DIM);
+    }
+    style
+}
+
 fn styled_spans<'a>(spans: &'a [SectionSpan], palette: &Palette) -> Vec<Span<'a>> {
     spans
         .iter()
-        .map(|span| {
-            let mut style = Style::default().fg(section_color(span.color.as_deref(), palette));
-            if span.bold {
-                style = style.add_modifier(Modifier::BOLD);
-            }
-            if span.dim {
-                style = style.add_modifier(Modifier::DIM);
-            }
-            Span::styled(span.text.as_str(), style)
-        })
+        .map(|span| Span::styled(span.text.as_str(), section_span_style(span, palette)))
         .collect()
+}
+
+fn truncated_styled_spans<'a>(
+    spans: &'a [SectionSpan],
+    max_width: usize,
+    palette: &Palette,
+) -> Vec<Span<'a>> {
+    let joined = spans
+        .iter()
+        .map(|span| span.text.as_str())
+        .collect::<String>();
+    let truncated = truncate_end(&joined, max_width);
+    if truncated == joined {
+        return styled_spans(spans, palette);
+    }
+
+    let prefix = truncated.strip_suffix('…').unwrap_or(&truncated);
+    let mut remaining = prefix.len();
+    let mut rendered = Vec::with_capacity(spans.len().saturating_add(1));
+    let mut ellipsis_style = spans
+        .iter()
+        .find(|span| !span.text.is_empty())
+        .map(|span| section_span_style(span, palette))
+        .unwrap_or_default();
+    for span in spans {
+        if remaining == 0 {
+            break;
+        }
+        let byte_len = remaining.min(span.text.len());
+        let text = span
+            .text
+            .get(..byte_len)
+            .expect("joined title prefix ends on a character boundary");
+        if !text.is_empty() {
+            ellipsis_style = section_span_style(span, palette);
+            rendered.push(Span::styled(text.to_string(), ellipsis_style));
+        }
+        remaining = remaining.saturating_sub(byte_len);
+    }
+    if truncated.ends_with('…') {
+        rendered.push(Span::styled("…", ellipsis_style));
+    }
+    rendered
 }
 
 /// A bar row's point is the bar itself: reserve this many cells before
@@ -303,15 +349,26 @@ struct BarColumns {
     label_width: u16,
 }
 
+fn bar_title_width(bar: &SectionBar) -> u16 {
+    match bar.title_spans.as_deref() {
+        Some(spans) => spans
+            .iter()
+            .map(|span| display_width_u16(&span.text))
+            .fold(0u16, u16::saturating_add),
+        None => bar
+            .title
+            .as_deref()
+            .map(display_width_u16)
+            .unwrap_or_default(),
+    }
+}
+
 impl BarColumns {
     fn for_rows<'a>(rows: impl Iterator<Item = &'a SectionRow>, area_width: u16) -> Self {
         let (title_width, label_width) = rows
             .filter_map(|row| match row {
                 SectionRow::Bar { bar } => Some((
-                    bar.title
-                        .as_deref()
-                        .map(display_width_u16)
-                        .unwrap_or_default(),
+                    bar_title_width(bar),
                     bar.label
                         .as_deref()
                         .map(display_width_u16)
@@ -375,6 +432,7 @@ fn render_bar(
     area: Rect,
     fraction: f64,
     title: Option<&str>,
+    title_spans: Option<&[SectionSpan]>,
     title_color: Option<&str>,
     label: Option<&str>,
     fill: Option<&str>,
@@ -386,9 +444,6 @@ fn render_bar(
         return;
     }
 
-    let title = title
-        .map(|title| truncate_end(title, columns.title_width.into()))
-        .unwrap_or_default();
     let label = label
         .map(|label| truncate_end(label, columns.label_width.into()))
         .unwrap_or_default();
@@ -434,13 +489,28 @@ fn render_bar(
     }
 
     if columns.title_width > 0 {
-        frame.render_widget(
-            Paragraph::new(Span::styled(
-                title,
-                Style::default().fg(section_color(title_color, palette)),
-            )),
-            Rect::new(area.x, area.y, columns.title_width, 1),
-        );
+        let area = Rect::new(area.x, area.y, columns.title_width, 1);
+        if let Some(title_spans) = title_spans {
+            frame.render_widget(
+                Paragraph::new(Line::from(truncated_styled_spans(
+                    title_spans,
+                    columns.title_width.into(),
+                    palette,
+                ))),
+                area,
+            );
+        } else {
+            let title = title
+                .map(|title| truncate_end(title, columns.title_width.into()))
+                .unwrap_or_default();
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    title,
+                    Style::default().fg(section_color(title_color, palette)),
+                )),
+                area,
+            );
+        }
     }
     if columns.label_width > 0 {
         frame.render_widget(
@@ -550,6 +620,7 @@ mod tests {
             bar: SectionBar {
                 fraction: 0.5,
                 title: None,
+                title_spans: None,
                 title_color: None,
                 label: None,
                 fill: Some("green".into()),
@@ -575,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn section_with_title_renders_styled_divider_and_max_rows_overflow() {
+    fn section_with_title_preserves_case_spacing_and_max_rows_overflow() {
         let mut app = AppState::test_new();
         app.workspaces = (1..=6)
             .map(|index| Workspace::test_new(&format!("agent-{index}")))
@@ -641,8 +712,21 @@ mod tests {
                 layout.sections_area.y + 1,
                 layout.sections_area.width
             ),
-            " BUILD STATUS"
+            " build status"
         );
+        let title_separator_x = layout.sections_area.x + display_width_u16(" build status");
+        assert_eq!(
+            buffer[(title_separator_x, layout.sections_area.y + 1)].symbol(),
+            " "
+        );
+        let separator_style = buffer[(title_separator_x, layout.sections_area.y + 1)].style();
+        assert_eq!(separator_style.fg, Some(app.palette.overlay0));
+        assert!(separator_style.add_modifier.contains(Modifier::BOLD));
+        assert!(separator_style.add_modifier.contains(Modifier::DIM));
+        assert!(!buffer[(title_separator_x + 1, layout.sections_area.y + 1)]
+            .style()
+            .add_modifier
+            .contains(Modifier::BOLD));
         assert_eq!(
             row_text(
                 buffer,
@@ -859,6 +943,7 @@ mod tests {
                     0.5,
                     Some("mum 5h"),
                     None,
+                    None,
                     Some("42% \u{21bb}1h47"),
                     None,
                     None,
@@ -870,6 +955,7 @@ mod tests {
                     Rect::new(0, 1, 26, 1),
                     1.0,
                     Some("victor spark 5h window"),
+                    None,
                     None,
                     Some("100% \u{21bb}23h59"),
                     None,
@@ -932,14 +1018,15 @@ mod tests {
     fn section_bar_rows_share_columns_and_identical_middle_budgets() {
         let rows = [
             ("al* 5h", "1% \u{21bb}4h38m", 0.1),
-            ("mu* sp 5h", "100% \u{21bb}23h59", 0.5),
-            ("vi* fa", "80%", 0.8),
+            ("mu* 5h sp", "100% \u{21bb}23h59", 0.5),
+            ("vi* 7d fa", "80%", 0.8),
         ]
         .into_iter()
         .map(|(title, label, fraction)| SectionRow::Bar {
             bar: SectionBar {
                 fraction,
                 title: Some(title.into()),
+                title_spans: None,
                 title_color: None,
                 label: Some(label.into()),
                 fill: None,
@@ -1001,6 +1088,7 @@ mod tests {
                 bar: SectionBar {
                     fraction: (index + 1) as f64 / labels.len() as f64,
                     title: None,
+                    title_spans: None,
                     title_color: None,
                     label: Some((*label).into()),
                     fill: None,
@@ -1075,6 +1163,7 @@ mod tests {
                 bar: SectionBar {
                     fraction: 0.5,
                     title: Some("A".into()),
+                    title_spans: None,
                     title_color: Some("peach".into()),
                     label: None,
                     fill: None,
@@ -1085,6 +1174,7 @@ mod tests {
                 bar: SectionBar {
                     fraction: 0.5,
                     title: Some("B".into()),
+                    title_spans: None,
                     title_color: Some("#123456".into()),
                     label: None,
                     fill: None,
@@ -1117,6 +1207,127 @@ mod tests {
     }
 
     #[test]
+    fn bar_title_spans_override_plain_title_and_preserve_shared_columns() {
+        let color = "#ff9f52";
+        let rows = [
+            SectionRow::Bar {
+                bar: SectionBar {
+                    fraction: 0.5,
+                    title: Some("plain fallback".into()),
+                    title_spans: Some(vec![
+                        SectionSpan {
+                            text: "al* ".into(),
+                            color: Some(color.into()),
+                            bold: false,
+                            dim: true,
+                        },
+                        SectionSpan {
+                            text: "7d fa".into(),
+                            color: Some(color.into()),
+                            bold: false,
+                            dim: false,
+                        },
+                    ]),
+                    title_color: Some("red".into()),
+                    label: Some(" 42%".into()),
+                    fill: None,
+                    empty: None,
+                },
+            },
+            SectionRow::Bar {
+                bar: SectionBar {
+                    fraction: 0.5,
+                    title: Some("other fallback".into()),
+                    title_spans: Some(vec![
+                        SectionSpan {
+                            text: "be* ".into(),
+                            color: Some(color.into()),
+                            bold: false,
+                            dim: true,
+                        },
+                        SectionSpan {
+                            text: "5h".into(),
+                            color: Some(color.into()),
+                            bold: false,
+                            dim: false,
+                        },
+                    ]),
+                    title_color: Some("red".into()),
+                    label: Some(" 42%".into()),
+                    fill: None,
+                    empty: None,
+                },
+            },
+        ];
+        let columns = BarColumns::for_rows(rows.iter(), 30);
+        assert_eq!(columns.title_width, 9);
+
+        let app = AppState::test_new();
+        let mut terminal = Terminal::new(TestBackend::new(30, 2)).unwrap();
+        terminal
+            .draw(|frame| {
+                for (row_index, row) in rows.iter().enumerate() {
+                    render_section_row(
+                        frame,
+                        Rect::new(0, row_index as u16, 30, 1),
+                        row,
+                        columns,
+                        &app.palette,
+                    );
+                }
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert!(row_text(buffer, 0, 30).starts_with("al* 7d fa "));
+        assert!(!row_text(buffer, 0, 30).contains("fallback"));
+        for column in 0..4 {
+            let style = buffer[(column, 0)].style();
+            assert_eq!(style.fg, Some(Color::Rgb(0xff, 0x9f, 0x52)));
+            assert!(style.add_modifier.contains(Modifier::DIM));
+        }
+        for column in 4..9 {
+            let style = buffer[(column, 0)].style();
+            assert_eq!(style.fg, Some(Color::Rgb(0xff, 0x9f, 0x52)));
+            assert!(!style.add_modifier.contains(Modifier::DIM));
+        }
+        let bar_positions = (0..2)
+            .map(|row| {
+                (0..30)
+                    .filter(|column| matches!(buffer[(*column, row)].symbol(), "█" | "░"))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bar_positions[0], bar_positions[1]);
+
+        let narrow_columns = BarColumns::for_rows(rows[..1].iter(), 18);
+        assert_eq!(narrow_columns.title_width, 6);
+        let mut narrow = Terminal::new(TestBackend::new(18, 1)).unwrap();
+        narrow
+            .draw(|frame| {
+                render_section_row(
+                    frame,
+                    Rect::new(0, 0, 18, 1),
+                    &rows[0],
+                    narrow_columns,
+                    &app.palette,
+                )
+            })
+            .unwrap();
+        let narrow_buffer = narrow.backend().buffer();
+        assert!(row_text(narrow_buffer, 0, 18).starts_with("al* 7\u{2026} "));
+        assert_eq!(
+            (0..18)
+                .filter(|column| matches!(narrow_buffer[(*column, 0)].symbol(), "█" | "░"))
+                .count(),
+            MIN_BAR_CELLS as usize
+        );
+        assert!(!narrow_buffer[(5, 0)]
+            .style()
+            .add_modifier
+            .contains(Modifier::DIM));
+    }
+
+    #[test]
     fn bar_fill_cell_count_matches_fraction_boundaries() {
         let app = AppState::test_new();
         let mut terminal = Terminal::new(TestBackend::new(10, 3)).unwrap();
@@ -1127,6 +1338,7 @@ mod tests {
                         frame,
                         Rect::new(0, row as u16, 10, 1),
                         fraction,
+                        None,
                         None,
                         None,
                         None,
@@ -1162,6 +1374,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
                     Some("#123456"),
                     None,
                     BarColumns::default(),
@@ -1171,6 +1384,7 @@ mod tests {
                     frame,
                     Rect::new(0, 1, 10, 1),
                     0.5,
+                    None,
                     None,
                     None,
                     None,
