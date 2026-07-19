@@ -909,6 +909,7 @@ fn capture_snapshot(state: &AppState) -> crate::persist::SessionSnapshot {
         state.agent_panel_scope,
         state.sidebar_width,
         state.sidebar_section_split,
+        state.sidebar_sections_height,
         state.collapsed_space_keys.clone(),
         state.remote_registry.clone(),
         &state.pane_id_aliases,

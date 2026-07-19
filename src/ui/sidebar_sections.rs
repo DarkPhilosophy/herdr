@@ -14,58 +14,86 @@ use crate::config::{CustomSidebarSectionConfig, SidebarSectionPlacement};
 
 use super::text::{display_width_u16, truncate_end};
 
+const MIN_PRIMARY_REGION_HEIGHT: u16 = 3;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SidebarSectionsLayout {
+pub(crate) struct SidebarRegionsLayout {
+    pub workspace_area: Rect,
     pub agent_area: Rect,
     pub sections_area: Rect,
 }
 
-pub(crate) fn sidebar_sections_layout(app: &AppState, detail_area: Rect) -> SidebarSectionsLayout {
-    let requested_height = app
-        .sidebar_sections_config
-        .iter()
-        .map(|config| configured_section_height(app, config))
-        .fold(0u16, u16::saturating_add);
-    let available_height = detail_area
-        .height
-        .saturating_sub(super::sidebar::AGENT_PANEL_HEADER_ROWS);
-    let sections_height = requested_height.min(available_height);
-    let agent_height = detail_area.height.saturating_sub(sections_height);
-    let agent_area = Rect::new(
-        detail_area.x,
-        detail_area.y,
-        detail_area.width,
-        agent_height,
+pub(crate) fn sidebar_regions_layout(app: &AppState, area: Rect) -> SidebarRegionsLayout {
+    let (workspace_area, agent_area) =
+        super::sidebar::expanded_sidebar_sections(area, app.sidebar_section_split);
+    let Some((min_sections_height, max_sections_height)) =
+        sidebar_sections_height_bounds(app, area)
+    else {
+        return SidebarRegionsLayout {
+            workspace_area,
+            agent_area,
+            sections_area: Rect::default(),
+        };
+    };
+
+    let sections_height = app
+        .sidebar_sections_height
+        .clamp(min_sections_height, max_sections_height);
+    let primary_area = Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        area.height.saturating_sub(sections_height),
     );
+    let (workspace_area, agent_area) =
+        super::sidebar::expanded_sidebar_sections(primary_area, app.sidebar_section_split);
     let sections_area = Rect::new(
-        detail_area.x,
-        detail_area.y.saturating_add(agent_height),
-        detail_area.width,
+        area.x,
+        area.y.saturating_add(primary_area.height),
+        area.width.saturating_sub(1),
         sections_height,
     );
-    SidebarSectionsLayout {
+    SidebarRegionsLayout {
+        workspace_area,
         agent_area,
         sections_area,
     }
 }
 
-pub(crate) fn expanded_sidebar_toggle_rect_for_state(app: &AppState, area: Rect) -> Rect {
-    let fallback = super::sidebar::expanded_sidebar_toggle_rect(area);
-    let (_, detail_area) =
-        super::sidebar::expanded_sidebar_sections(area, app.sidebar_section_split);
-    let layout = sidebar_sections_layout(app, detail_area);
-    if layout.sections_area.height == 0 || layout.agent_area.height == 0 {
-        return fallback;
-    }
-    Rect::new(
-        fallback.x,
-        layout
-            .agent_area
-            .y
-            .saturating_add(layout.agent_area.height.saturating_sub(1)),
-        fallback.width,
-        fallback.height,
+fn live_sections_min_height(app: &AppState) -> Option<u16> {
+    app.sidebar_sections_config.iter().find_map(|config| {
+        app.sidebar_section_reports
+            .rows(&config.id)
+            // Divider + optional title header + one content row.
+            .map(|_| 2u16.saturating_add(u16::from(config.title.is_some())))
+    })
+}
+
+pub(crate) fn sidebar_sections_height_bounds(app: &AppState, area: Rect) -> Option<(u16, u16)> {
+    let min = live_sections_min_height(app)?;
+    let max = area
+        .height
+        .saturating_sub(MIN_PRIMARY_REGION_HEIGHT.saturating_mul(2));
+    (area.width > 1 && max >= min).then_some((min, max))
+}
+pub(crate) fn spaces_agents_divider_rect(app: &AppState, area: Rect) -> Rect {
+    let layout = sidebar_regions_layout(app, area);
+    let primary_height = if layout.sections_area.height > 0 {
+        layout.sections_area.y.saturating_sub(area.y)
+    } else {
+        area.height
+    };
+    super::sidebar::sidebar_section_divider_rect(
+        Rect::new(area.x, area.y, area.width, primary_height),
+        app.sidebar_section_split,
     )
+}
+
+pub(crate) fn sidebar_sections_divider_rect(app: &AppState, area: Rect) -> Rect {
+    let sections = sidebar_regions_layout(app, area).sections_area;
+    (sections.height > 0)
+        .then_some(Rect::new(sections.x, sections.y, sections.width, 1))
+        .unwrap_or_default()
 }
 
 fn configured_section_height(app: &AppState, config: &CustomSidebarSectionConfig) -> u16 {
@@ -80,6 +108,13 @@ fn configured_section_height(app: &AppState, config: &CustomSidebarSectionConfig
             })
             .unwrap_or(0),
     }
+}
+
+fn focused_pane_token<'a>(app: &'a AppState, key: &str) -> Option<&'a str> {
+    let workspace = app.workspaces.get(app.active?)?;
+    let pane_id = workspace.focused_pane_id()?;
+    let terminal_id = workspace.terminal_id(pane_id)?;
+    app.terminals.get(terminal_id)?.metadata_tokens.get(key)
 }
 
 pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: Rect) {
@@ -114,7 +149,13 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
         } else {
             rows.len()
         };
-        let bar_columns = BarColumns::for_rows(rows.iter().take(content_rows), area.width);
+        let marker_width = u16::from(config.highlight_token.is_some() && area.width > 0);
+        let row_width = area.width.saturating_sub(marker_width);
+        let bar_columns = BarColumns::for_rows(rows.iter().take(content_rows), row_width);
+        let highlight_value = config
+            .highlight_token
+            .as_deref()
+            .and_then(|key| focused_pane_token(app, key));
 
         if remaining == 0 {
             break;
@@ -129,7 +170,7 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
             }
             frame.render_widget(
                 Paragraph::new(Span::styled(
-                    format!(" {title} "),
+                    format!(" {} ", title.to_uppercase()),
                     Style::default()
                         .fg(app.palette.overlay0)
                         .add_modifier(Modifier::BOLD)
@@ -145,9 +186,23 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
             if remaining == 0 {
                 break 'sections;
             }
+            let highlighted = match (row, highlight_value) {
+                (SectionRow::Bar { bar }, Some(value)) => {
+                    bar.match_values.iter().any(|candidate| candidate == value)
+                }
+                _ => false,
+            };
+            if marker_width > 0 {
+                render_match_marker(
+                    frame,
+                    Rect::new(area.x, row_y, marker_width, 1),
+                    highlighted,
+                    &app.palette,
+                );
+            }
             render_section_row(
                 frame,
-                Rect::new(area.x, row_y, area.width, 1),
+                Rect::new(area.x.saturating_add(marker_width), row_y, row_width, 1),
                 row,
                 bar_columns,
                 &app.palette,
@@ -208,6 +263,23 @@ fn render_overflow_indicator(frame: &mut Frame, area: Rect, hidden: usize, palet
     );
 }
 
+fn render_match_marker(frame: &mut Frame, area: Rect, highlighted: bool, palette: &Palette) {
+    if area.width == 0 {
+        return;
+    }
+    let cell = &mut frame.buffer_mut()[(area.x, area.y)];
+    cell.set_symbol(" ");
+    cell.set_style(Style::default());
+    if highlighted {
+        cell.set_symbol("▎");
+        cell.set_style(
+            Style::default()
+                .fg(palette.accent)
+                .add_modifier(Modifier::BOLD),
+        );
+    }
+}
+
 fn render_section_row(
     frame: &mut Frame,
     area: Rect,
@@ -227,6 +299,7 @@ fn render_section_row(
             bar.title_spans.as_deref(),
             bar.title_color.as_deref(),
             bar.label.as_deref(),
+            bar.label_spans.as_deref(),
             bar.fill.as_deref(),
             bar.empty.as_deref(),
             bar_columns,
@@ -260,13 +333,14 @@ fn render_spans(
 
     if left_width > 0 {
         frame.render_widget(
-            Paragraph::new(Line::from(styled_spans(spans, palette))),
+            Paragraph::new(Line::from(styled_spans(spans, palette, palette.text))),
             Rect::new(area.x, area.y, left_width, 1),
         );
     }
     if right_width > 0 {
         frame.render_widget(
-            Paragraph::new(Line::from(styled_spans(right, palette))).alignment(Alignment::Right),
+            Paragraph::new(Line::from(styled_spans(right, palette, palette.text)))
+                .alignment(Alignment::Right),
             Rect::new(
                 area.x
                     .saturating_add(area.width.saturating_sub(right_width)),
@@ -278,8 +352,13 @@ fn render_spans(
     }
 }
 
-fn section_span_style(span: &SectionSpan, palette: &Palette) -> Style {
-    let mut style = Style::default().fg(section_color(span.color.as_deref(), palette));
+fn section_span_style(span: &SectionSpan, palette: &Palette, default_color: Color) -> Style {
+    let color = span
+        .color
+        .as_deref()
+        .map(|color| section_color(Some(color), palette))
+        .unwrap_or(default_color);
+    let mut style = Style::default().fg(color);
     if span.bold {
         style = style.add_modifier(Modifier::BOLD);
     }
@@ -289,10 +368,19 @@ fn section_span_style(span: &SectionSpan, palette: &Palette) -> Style {
     style
 }
 
-fn styled_spans<'a>(spans: &'a [SectionSpan], palette: &Palette) -> Vec<Span<'a>> {
+fn styled_spans<'a>(
+    spans: &'a [SectionSpan],
+    palette: &Palette,
+    default_color: Color,
+) -> Vec<Span<'a>> {
     spans
         .iter()
-        .map(|span| Span::styled(span.text.as_str(), section_span_style(span, palette)))
+        .map(|span| {
+            Span::styled(
+                span.text.as_str(),
+                section_span_style(span, palette, default_color),
+            )
+        })
         .collect()
 }
 
@@ -300,6 +388,7 @@ fn truncated_styled_spans<'a>(
     spans: &'a [SectionSpan],
     max_width: usize,
     palette: &Palette,
+    default_color: Color,
 ) -> Vec<Span<'a>> {
     let joined = spans
         .iter()
@@ -307,7 +396,7 @@ fn truncated_styled_spans<'a>(
         .collect::<String>();
     let truncated = truncate_end(&joined, max_width);
     if truncated == joined {
-        return styled_spans(spans, palette);
+        return styled_spans(spans, palette, default_color);
     }
 
     let prefix = truncated.strip_suffix('…').unwrap_or(&truncated);
@@ -316,7 +405,7 @@ fn truncated_styled_spans<'a>(
     let mut ellipsis_style = spans
         .iter()
         .find(|span| !span.text.is_empty())
-        .map(|span| section_span_style(span, palette))
+        .map(|span| section_span_style(span, palette, default_color))
         .unwrap_or_default();
     for span in spans {
         if remaining == 0 {
@@ -328,7 +417,7 @@ fn truncated_styled_spans<'a>(
             .get(..byte_len)
             .expect("joined title prefix ends on a character boundary");
         if !text.is_empty() {
-            ellipsis_style = section_span_style(span, palette);
+            ellipsis_style = section_span_style(span, palette, default_color);
             rendered.push(Span::styled(text.to_string(), ellipsis_style));
         }
         remaining = remaining.saturating_sub(byte_len);
@@ -363,17 +452,25 @@ fn bar_title_width(bar: &SectionBar) -> u16 {
     }
 }
 
+fn bar_label_width(bar: &SectionBar) -> u16 {
+    match bar.label_spans.as_deref() {
+        Some(spans) => spans
+            .iter()
+            .map(|span| display_width_u16(&span.text))
+            .fold(0u16, u16::saturating_add),
+        None => bar
+            .label
+            .as_deref()
+            .map(display_width_u16)
+            .unwrap_or_default(),
+    }
+}
+
 impl BarColumns {
     fn for_rows<'a>(rows: impl Iterator<Item = &'a SectionRow>, area_width: u16) -> Self {
         let (title_width, label_width) = rows
             .filter_map(|row| match row {
-                SectionRow::Bar { bar } => Some((
-                    bar_title_width(bar),
-                    bar.label
-                        .as_deref()
-                        .map(display_width_u16)
-                        .unwrap_or_default(),
-                )),
+                SectionRow::Bar { bar } => Some((bar_title_width(bar), bar_label_width(bar))),
                 SectionRow::Spans { .. } => None,
             })
             .fold((0, 0), |(max_title, max_label), (title, label)| {
@@ -435,6 +532,7 @@ fn render_bar(
     title_spans: Option<&[SectionSpan]>,
     title_color: Option<&str>,
     label: Option<&str>,
+    label_spans: Option<&[SectionSpan]>,
     fill: Option<&str>,
     empty: Option<&str>,
     columns: BarColumns,
@@ -444,9 +542,6 @@ fn render_bar(
         return;
     }
 
-    let label = label
-        .map(|label| truncate_end(label, columns.label_width.into()))
-        .unwrap_or_default();
     let bar_x = area
         .x
         .saturating_add(columns.title_width)
@@ -496,6 +591,7 @@ fn render_bar(
                     title_spans,
                     columns.title_width.into(),
                     palette,
+                    palette.text,
                 ))),
                 area,
             );
@@ -513,16 +609,33 @@ fn render_bar(
         }
     }
     if columns.label_width > 0 {
-        frame.render_widget(
-            Paragraph::new(Span::styled(label, Style::default().fg(palette.subtext0)))
-                .alignment(Alignment::Right),
-            Rect::new(
-                area.x + area.width.saturating_sub(columns.label_width),
-                area.y,
-                columns.label_width,
-                1,
-            ),
+        let area = Rect::new(
+            area.x + area.width.saturating_sub(columns.label_width),
+            area.y,
+            columns.label_width,
+            1,
         );
+        if let Some(label_spans) = label_spans {
+            frame.render_widget(
+                Paragraph::new(Line::from(truncated_styled_spans(
+                    label_spans,
+                    columns.label_width.into(),
+                    palette,
+                    palette.subtext0,
+                )))
+                .alignment(Alignment::Right),
+                area,
+            );
+        } else {
+            let label = label
+                .map(|label| truncate_end(label, columns.label_width.into()))
+                .unwrap_or_default();
+            frame.render_widget(
+                Paragraph::new(Span::styled(label, Style::default().fg(palette.subtext0)))
+                    .alignment(Alignment::Right),
+                area,
+            );
+        }
     }
 }
 
@@ -581,6 +694,7 @@ mod tests {
         CustomSidebarSectionConfig {
             id: id.into(),
             title: title.map(str::to_string),
+            highlight_token: None,
             max_rows,
             placement: SidebarSectionPlacement::BelowAgents,
         }
@@ -623,6 +737,8 @@ mod tests {
                 title_spans: None,
                 title_color: None,
                 label: None,
+                label_spans: None,
+                match_values: Vec::new(),
                 fill: Some("green".into()),
                 empty: Some("subtext0".into()),
             },
@@ -646,7 +762,7 @@ mod tests {
     }
 
     #[test]
-    fn section_with_title_preserves_case_spacing_and_max_rows_overflow() {
+    fn section_with_title_uppercases_header_and_caps_rows_with_overflow() {
         let mut app = AppState::test_new();
         app.workspaces = (1..=6)
             .map(|index| Workspace::test_new(&format!("agent-{index}")))
@@ -668,15 +784,17 @@ mod tests {
             vec![span_row("ready"), span_row("capped"), span_row("hidden")],
         );
 
+        app.sidebar_sections_height = 4;
         let area = Rect::new(0, 0, 20, 20);
-        let (_, detail_area) =
+        let (full_workspace_area, detail_area) =
             super::super::sidebar::expanded_sidebar_sections(area, app.sidebar_section_split);
         let full_metrics = super::super::sidebar::agent_panel_scroll_metrics(&app, detail_area);
-        let layout = sidebar_sections_layout(&app, detail_area);
+        let layout = sidebar_regions_layout(&app, area);
         let reduced_metrics =
             super::super::sidebar::agent_panel_scroll_metrics(&app, layout.agent_area);
         assert_eq!(layout.sections_area.height, 4);
-        assert_eq!(layout.agent_area.height, detail_area.height - 4);
+        assert!(layout.workspace_area.height < full_workspace_area.height);
+        assert!(layout.agent_area.height < detail_area.height);
         assert!(reduced_metrics.viewport_rows < full_metrics.viewport_rows);
 
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
@@ -712,9 +830,9 @@ mod tests {
                 layout.sections_area.y + 1,
                 layout.sections_area.width
             ),
-            " build status"
+            " BUILD STATUS"
         );
-        let title_separator_x = layout.sections_area.x + display_width_u16(" build status");
+        let title_separator_x = layout.sections_area.x + display_width_u16(" BUILD STATUS");
         assert_eq!(
             buffer[(title_separator_x, layout.sections_area.y + 1)].symbol(),
             " "
@@ -723,6 +841,10 @@ mod tests {
         assert_eq!(separator_style.fg, Some(app.palette.overlay0));
         assert!(separator_style.add_modifier.contains(Modifier::BOLD));
         assert!(separator_style.add_modifier.contains(Modifier::DIM));
+        let title_style = buffer[(layout.sections_area.x + 1, layout.sections_area.y + 1)].style();
+        assert_eq!(title_style.fg, Some(app.palette.overlay0));
+        assert!(title_style.add_modifier.contains(Modifier::BOLD));
+        assert!(title_style.add_modifier.contains(Modifier::DIM));
         assert!(!buffer[(title_separator_x + 1, layout.sections_area.y + 1)]
             .style()
             .add_modifier
@@ -735,13 +857,19 @@ mod tests {
             ),
             "ready"
         );
+        let overflow_row = row_text(
+            buffer,
+            layout.sections_area.y + 3,
+            layout.sections_area.width,
+        );
+        assert!(overflow_row.starts_with("… 2 more"), "{overflow_row}");
         assert_eq!(
-            row_text(
-                buffer,
-                layout.sections_area.y + 3,
-                layout.sections_area.width
-            ),
-            "… 2 more"
+            buffer[(
+                layout.sections_area.x + layout.sections_area.width - 1,
+                layout.sections_area.y + 3
+            )]
+                .symbol(),
+            "«"
         );
         assert!(buffer[(layout.sections_area.x, layout.sections_area.y + 3)]
             .style()
@@ -770,9 +898,10 @@ mod tests {
         let mut app = AppState::test_new();
         app.sidebar_sections_config = vec![config("account", None, 12)];
         report(&mut app, "account", rows);
+        app.sidebar_sections_height = 12;
 
         let roomy_area = Rect::new(0, 0, 20, 30);
-        let roomy_layout = sidebar_sections_layout(&app, roomy_area);
+        let roomy_layout = sidebar_regions_layout(&app, roomy_area);
         assert_eq!(roomy_layout.sections_area.height, 12);
         let mut roomy_terminal =
             Terminal::new(TestBackend::new(roomy_area.width, roomy_area.height)).unwrap();
@@ -785,17 +914,24 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(roomy_rows.len(), 12);
         assert!(roomy_rows.iter().all(|row| !row.is_empty()));
-        assert_eq!(roomy_rows[0], "─".repeat(roomy_area.width.into()));
+        assert_eq!(
+            roomy_rows[0],
+            "─".repeat(roomy_layout.sections_area.width.into())
+        );
         assert_eq!(roomy_rows[1], "ACCOUNT");
         assert!(roomy_rows[2].starts_with("window-1"));
         assert!(roomy_rows[2].ends_with("10% 5m"));
-        assert_eq!(display_width_u16(&roomy_rows[3]), roomy_area.width);
+        assert_eq!(
+            display_width_u16(&roomy_rows[3]),
+            roomy_layout.sections_area.width
+        );
         assert!(roomy_rows.iter().all(|row| !row.contains("more")));
 
         let cramped_area = Rect::new(0, 0, 20, 10);
-        let cramped_layout = sidebar_sections_layout(&app, cramped_area);
+        let cramped_layout = sidebar_regions_layout(&app, cramped_area);
+        assert_eq!(cramped_layout.workspace_area.height, 3);
         assert_eq!(cramped_layout.agent_area.height, 3);
-        assert_eq!(cramped_layout.sections_area.height, 7);
+        assert_eq!(cramped_layout.sections_area.height, 4);
         let mut cramped_terminal =
             Terminal::new(TestBackend::new(cramped_area.width, cramped_area.height)).unwrap();
         cramped_terminal
@@ -811,7 +947,7 @@ mod tests {
                 overflow_y,
                 cramped_area.width
             ),
-            "… 6 more"
+            "… 9 more"
         );
         assert!(
             cramped_terminal.backend().buffer()[(cramped_layout.sections_area.x, overflow_y)]
@@ -833,8 +969,9 @@ mod tests {
                 .collect(),
         );
 
-        let area = Rect::new(0, 0, 20, 28);
-        let layout = sidebar_sections_layout(&app, area);
+        app.sidebar_sections_height = 25;
+        let area = Rect::new(0, 0, 20, 31);
+        let layout = sidebar_regions_layout(&app, area);
         assert_eq!(layout.sections_area.height, 25);
         assert_eq!(layout.agent_area.height, 3);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
@@ -852,7 +989,7 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             rendered.first().map(String::as_str),
-            Some("────────────────────")
+            Some("───────────────────")
         );
         assert_eq!(rendered.get(1).map(String::as_str), Some("row-00"));
         assert_eq!(rendered.last().map(String::as_str), Some("row-23"));
@@ -865,7 +1002,7 @@ mod tests {
         let mut app = AppState::test_new();
         app.sidebar_sections_config = vec![config("build", Some("build"), 6)];
         assert_eq!(
-            sidebar_sections_layout(&app, detail_area)
+            sidebar_regions_layout(&app, detail_area)
                 .sections_area
                 .height,
             0
@@ -883,7 +1020,7 @@ mod tests {
             Ok(false)
         );
         assert_eq!(
-            sidebar_sections_layout(&app, detail_area)
+            sidebar_regions_layout(&app, detail_area)
                 .sections_area
                 .height,
             0
@@ -905,7 +1042,7 @@ mod tests {
             .sidebar_section_reports
             .expire_at(now + Duration::from_millis(1)));
         assert_eq!(
-            sidebar_sections_layout(&app, detail_area)
+            sidebar_regions_layout(&app, detail_area)
                 .sections_area
                 .height,
             0
@@ -914,7 +1051,7 @@ mod tests {
         report(&mut app, "unconfigured", vec![span_row("hidden")]);
         app.sidebar_sections_config.clear();
         assert_eq!(
-            sidebar_sections_layout(&app, detail_area)
+            sidebar_regions_layout(&app, detail_area)
                 .sections_area
                 .height,
             0
@@ -947,6 +1084,7 @@ mod tests {
                     Some("42% \u{21bb}1h47"),
                     None,
                     None,
+                    None,
                     row0_columns,
                     &app.palette,
                 );
@@ -958,6 +1096,7 @@ mod tests {
                     None,
                     None,
                     Some("100% \u{21bb}23h59"),
+                    None,
                     None,
                     None,
                     row1_columns,
@@ -1029,6 +1168,8 @@ mod tests {
                 title_spans: None,
                 title_color: None,
                 label: Some(label.into()),
+                label_spans: None,
+                match_values: Vec::new(),
                 fill: None,
                 empty: None,
             },
@@ -1038,8 +1179,9 @@ mod tests {
         app.sidebar_sections_config = vec![config("usage", None, 3)];
         report(&mut app, "usage", rows);
 
-        let area = Rect::new(0, 0, 42, 8);
-        let layout = sidebar_sections_layout(&app, area);
+        app.sidebar_sections_height = 4;
+        let area = Rect::new(0, 0, 42, 10);
+        let layout = sidebar_regions_layout(&app, area);
         assert_eq!(layout.sections_area.height, 4);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
@@ -1059,15 +1201,16 @@ mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        assert_eq!(bar_metrics, vec![(20, Some(10), Some(29)); 3]);
+        assert_eq!(bar_metrics, vec![(19, Some(10), Some(28)); 3]);
         assert_eq!(
             (0..6)
                 .map(|column| buffer[(column, layout.sections_area.y + 1)].symbol())
                 .collect::<String>(),
             "al* 5h"
         );
+        let label_right = layout.sections_area.x + layout.sections_area.width;
         assert_eq!(
-            (39..42)
+            (label_right - 3..label_right)
                 .map(|column| buffer[(column, layout.sections_area.y + 3)].symbol())
                 .collect::<String>(),
             "80%"
@@ -1091,6 +1234,8 @@ mod tests {
                     title_spans: None,
                     title_color: None,
                     label: Some((*label).into()),
+                    label_spans: None,
+                    match_values: Vec::new(),
                     fill: None,
                     empty: None,
                 },
@@ -1105,28 +1250,30 @@ mod tests {
         app.sidebar_sections_config = vec![config("usage", None, 3)];
         report(&mut app, "usage", rows);
 
-        let area = Rect::new(0, 0, 36, 8);
-        let layout = sidebar_sections_layout(&app, area);
+        app.sidebar_sections_height = 4;
+        let area = Rect::new(0, 0, 36, 10);
+        let layout = sidebar_regions_layout(&app, area);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal
             .draw(|frame| render_sidebar_sections(&app, frame, layout.sections_area))
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let label_start = area.width - label_width;
+        let label_right = layout.sections_area.x + layout.sections_area.width;
+        let label_start = label_right - label_width;
         let metrics = labels
             .iter()
             .enumerate()
             .map(|(index, expected)| {
                 let row = layout.sections_area.y + index as u16 + 1;
-                let rendered = (label_start..area.width)
+                let rendered = (label_start..label_right)
                     .map(|column| buffer[(column, row)].symbol())
                     .collect::<String>();
                 assert_eq!(rendered, *expected);
 
-                let percent = (label_start..area.width)
+                let percent = (label_start..label_right)
                     .find(|column| buffer[(*column, row)].symbol() == "%")
                     .expect("percentage glyph");
-                let arrow = (label_start..area.width)
+                let arrow = (label_start..label_right)
                     .find(|column| buffer[(*column, row)].symbol() == "\u{21bb}")
                     .expect("reset glyph");
                 assert_eq!(
@@ -1134,14 +1281,14 @@ mod tests {
                     " ",
                     "reset glyph has a separating cell"
                 );
-                let countdown_start = (arrow + 2..area.width)
+                let countdown_start = (arrow + 2..label_right)
                     .find(|column| buffer[(*column, row)].symbol() != " ")
                     .expect("countdown");
-                let countdown_end = (label_start..area.width)
+                let countdown_end = (label_start..label_right)
                     .rev()
                     .find(|column| buffer[(*column, row)].symbol() != " ")
                     .expect("countdown end");
-                assert_eq!(countdown_end, area.width - 1);
+                assert_eq!(countdown_end, label_right - 1);
                 (percent, arrow, countdown_start, countdown_end)
             })
             .collect::<Vec<_>>();
@@ -1166,6 +1313,8 @@ mod tests {
                     title_spans: None,
                     title_color: Some("peach".into()),
                     label: None,
+                    label_spans: None,
+                    match_values: Vec::new(),
                     fill: None,
                     empty: None,
                 },
@@ -1177,6 +1326,8 @@ mod tests {
                     title_spans: None,
                     title_color: Some("#123456".into()),
                     label: None,
+                    label_spans: None,
+                    match_values: Vec::new(),
                     fill: None,
                     empty: None,
                 },
@@ -1230,6 +1381,8 @@ mod tests {
                     ]),
                     title_color: Some("red".into()),
                     label: Some(" 42%".into()),
+                    label_spans: None,
+                    match_values: Vec::new(),
                     fill: None,
                     empty: None,
                 },
@@ -1254,6 +1407,8 @@ mod tests {
                     ]),
                     title_color: Some("red".into()),
                     label: Some(" 42%".into()),
+                    label_spans: None,
+                    match_values: Vec::new(),
                     fill: None,
                     empty: None,
                 },
@@ -1328,6 +1483,170 @@ mod tests {
     }
 
     #[test]
+    fn bar_label_spans_override_plain_label_and_preserve_styles_when_truncated() {
+        let row = SectionRow::Bar {
+            bar: SectionBar {
+                fraction: 0.5,
+                title: None,
+                title_spans: None,
+                title_color: None,
+                label: Some("plain fallback".into()),
+                label_spans: Some(vec![
+                    SectionSpan {
+                        text: " 42%".into(),
+                        color: Some("subtext0".into()),
+                        bold: false,
+                        dim: false,
+                    },
+                    SectionSpan {
+                        text: " \u{21bb} 4h29m".into(),
+                        color: Some("#c8d0dc".into()),
+                        bold: true,
+                        dim: false,
+                    },
+                ]),
+                match_values: Vec::new(),
+                fill: None,
+                empty: None,
+            },
+        };
+        let app = AppState::test_new();
+        let columns = BarColumns::for_rows(std::iter::once(&row), 30);
+        let mut terminal = Terminal::new(TestBackend::new(30, 1)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_section_row(frame, Rect::new(0, 0, 30, 1), &row, columns, &app.palette)
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered = row_text(buffer, 0, 30);
+        assert!(rendered.ends_with(" 42% \u{21bb} 4h29m"), "{rendered}");
+        assert!(!rendered.contains("fallback"));
+        let percent = (0..30)
+            .find(|column| buffer[(*column, 0)].symbol() == "%")
+            .unwrap();
+        let arrow = (0..30)
+            .find(|column| buffer[(*column, 0)].symbol() == "\u{21bb}")
+            .unwrap();
+        assert_eq!(buffer[(percent, 0)].style().fg, Some(app.palette.subtext0));
+        assert_eq!(
+            buffer[(arrow, 0)].style().fg,
+            Some(Color::Rgb(0xc8, 0xd0, 0xdc))
+        );
+        assert!(buffer[(arrow, 0)]
+            .style()
+            .add_modifier
+            .contains(Modifier::BOLD));
+
+        let narrow_columns = BarColumns::for_rows(std::iter::once(&row), 18);
+        let mut narrow = Terminal::new(TestBackend::new(18, 1)).unwrap();
+        narrow
+            .draw(|frame| {
+                render_section_row(
+                    frame,
+                    Rect::new(0, 0, 18, 1),
+                    &row,
+                    narrow_columns,
+                    &app.palette,
+                )
+            })
+            .unwrap();
+        let narrow_buffer = narrow.backend().buffer();
+        assert_eq!(narrow_buffer[(17, 0)].symbol(), "\u{2026}");
+        assert_eq!(
+            narrow_buffer[(17, 0)].style().fg,
+            Some(Color::Rgb(0xc8, 0xd0, 0xdc))
+        );
+        assert!(narrow_buffer[(17, 0)]
+            .style()
+            .add_modifier
+            .contains(Modifier::BOLD));
+    }
+
+    #[test]
+    fn focused_metadata_token_marks_matching_bar_without_shifting_columns() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        app.selected = 0;
+        let pane_id = app.workspaces[0].tabs[0].layout.focused();
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .metadata_tokens
+            .patch(
+                std::collections::HashMap::from([(
+                    "vault_broker".to_string(),
+                    Some("broker-a".to_string()),
+                )]),
+                None,
+                Instant::now(),
+            );
+        let mut section = config("usage", None, 2);
+        section.highlight_token = Some("vault_broker".into());
+        app.sidebar_sections_config = vec![section];
+        let rows = ["broker-a", "broker-b"]
+            .into_iter()
+            .map(|broker| SectionRow::Bar {
+                bar: SectionBar {
+                    fraction: 0.5,
+                    title: Some("gr* 5h".into()),
+                    title_spans: None,
+                    title_color: None,
+                    label: Some(" 42%".into()),
+                    label_spans: None,
+                    match_values: vec![broker.into()],
+                    fill: None,
+                    empty: None,
+                },
+            })
+            .collect();
+        report(&mut app, "usage", rows);
+        app.sidebar_sections_height = 3;
+
+        let area = Rect::new(0, 0, 28, 9);
+        let layout = sidebar_regions_layout(&app, area);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar_sections(&app, frame, layout.sections_area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let matching_y = layout.sections_area.y + 1;
+        let other_y = matching_y + 1;
+        assert_eq!(
+            buffer[(layout.sections_area.x, matching_y)].symbol(),
+            "\u{258e}"
+        );
+        assert_eq!(
+            buffer[(layout.sections_area.x, matching_y)].style().fg,
+            Some(app.palette.accent)
+        );
+        assert!(buffer[(layout.sections_area.x, matching_y)]
+            .style()
+            .add_modifier
+            .contains(Modifier::BOLD));
+        assert_eq!(buffer[(layout.sections_area.x, other_y)].symbol(), " ");
+        assert_eq!(
+            buffer[(layout.sections_area.x, other_y)].style().fg,
+            Some(Color::Reset)
+        );
+
+        let bar_positions = [matching_y, other_y].map(|row| {
+            (0..area.width)
+                .filter(|column| matches!(buffer[(*column, row)].symbol(), "\u{2588}" | "\u{2591}"))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(bar_positions[0], bar_positions[1]);
+        assert!(bar_positions[0]
+            .first()
+            .is_some_and(|column| *column > layout.sections_area.x));
+    }
+
+    #[test]
     fn bar_fill_cell_count_matches_fraction_boundaries() {
         let app = AppState::test_new();
         let mut terminal = Terminal::new(TestBackend::new(10, 3)).unwrap();
@@ -1338,6 +1657,7 @@ mod tests {
                         frame,
                         Rect::new(0, row as u16, 10, 1),
                         fraction,
+                        None,
                         None,
                         None,
                         None,
@@ -1375,6 +1695,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
                     Some("#123456"),
                     None,
                     BarColumns::default(),
@@ -1384,6 +1705,7 @@ mod tests {
                     frame,
                     Rect::new(0, 1, 10, 1),
                     0.5,
+                    None,
                     None,
                     None,
                     None,

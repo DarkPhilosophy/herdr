@@ -274,6 +274,8 @@ pub enum SidebarSectionPlacement {
 pub struct CustomSidebarSectionConfig {
     pub id: String,
     pub title: Option<String>,
+    /// Pane metadata token whose focused value marks matching bar rows.
+    pub highlight_token: Option<String>,
     #[serde(
         default = "default_custom_section_max_rows",
         deserialize_with = "deserialize_custom_section_max_rows"
@@ -287,6 +289,7 @@ impl Default for CustomSidebarSectionConfig {
         Self {
             id: String::new(),
             title: None,
+            highlight_token: None,
             max_rows: default_custom_section_max_rows(),
             placement: SidebarSectionPlacement::BelowAgents,
         }
@@ -329,7 +332,19 @@ impl SidebarConfig {
                 ));
                 continue;
             }
-            sections.push(section.clone());
+            let mut section = section.clone();
+            if section
+                .highlight_token
+                .as_deref()
+                .is_some_and(|token| !sidebar_section_id_is_valid(token))
+            {
+                diagnostics.push(format!(
+                    "invalid sidebar section highlight token: ui.sidebar.sections[{index}].highlight_token = {:?}; disabling row highlighting",
+                    section.highlight_token
+                ));
+                section.highlight_token = None;
+            }
+            sections.push(section);
         }
         (sections, diagnostics)
     }
@@ -505,6 +520,7 @@ row_gap = 3
 [[ui.sidebar.sections]]
 id = "build"
 title = "Build status"
+highlight_token = "vault_broker"
 max_rows = 99
 placement = "below_agents"
 
@@ -526,18 +542,21 @@ placement = "below_agents"
                 CustomSidebarSectionConfig {
                     id: "build".into(),
                     title: Some("Build status".into()),
+                    highlight_token: Some("vault_broker".into()),
                     max_rows: MAX_CUSTOM_SECTION_MAX_ROWS,
                     placement: SidebarSectionPlacement::BelowAgents,
                 },
                 CustomSidebarSectionConfig {
                     id: "deploy".into(),
                     title: None,
+                    highlight_token: None,
                     max_rows: DEFAULT_CUSTOM_SECTION_MAX_ROWS,
                     placement: SidebarSectionPlacement::BelowAgents,
                 },
                 CustomSidebarSectionConfig {
                     id: "minimum".into(),
                     title: None,
+                    highlight_token: None,
                     max_rows: MIN_CUSTOM_SECTION_MAX_ROWS,
                     placement: SidebarSectionPlacement::BelowAgents,
                 },
@@ -576,6 +595,28 @@ placement = "below_agents"
         assert!(diagnostics
             .iter()
             .any(|diagnostic| diagnostic.contains("duplicate sidebar section id")));
+    }
+
+    #[test]
+    fn invalid_section_highlight_token_is_diagnostic_and_disabled() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[[ui.sidebar.sections]]
+id = "usage"
+highlight_token = "vault.broker"
+placement = "below_agents"
+"#,
+        )
+        .expect("invalid highlight token remains parseable");
+
+        let resolved = config.ui.sidebar.resolved_sections();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].id, "usage");
+        assert_eq!(resolved[0].highlight_token, None);
+        assert!(config
+            .collect_diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.contains("invalid sidebar section highlight token")));
     }
 
     #[test]

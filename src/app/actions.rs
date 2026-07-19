@@ -4395,6 +4395,7 @@ mod tests {
         state.sidebar_sections_config = vec![crate::config::CustomSidebarSectionConfig {
             id: "build".into(),
             title: None,
+            highlight_token: None,
             max_rows: 3,
             placement: crate::config::SidebarSectionPlacement::BelowAgents,
         }];

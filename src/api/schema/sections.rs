@@ -51,6 +51,17 @@ pub struct SectionBar {
     pub title_color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Styled right-aligned label fragments. When present, these override
+    /// `label`. The joined fragments are measured and truncated as one unit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 8))]
+    pub label_spans: Option<Vec<SectionSpan>>,
+    /// Focus-matching values for this row. When its section config names a
+    /// pane metadata token, the row is marked while the focused pane's token
+    /// value equals any entry. At most 8 values of 200 characters each.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 8))]
+    pub match_values: Vec<String>,
     /// Uniform color for filled cells. Uses the span color grammar; when
     /// absent, filled cells use the default positional gradient.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,6 +110,11 @@ mod tests {
                         ],
                         "title_color": "peach",
                         "label": "5/10",
+                        "label_spans": [
+                            {"text": "5/10 "},
+                            {"text": "↻ 30m", "color": "#c8d0dc", "bold": true}
+                        ],
+                        "match_values": ["http://broker-a", "http://broker-b"],
                         "fill": "#123456",
                         "empty": "subtext0"
                     }}
@@ -147,6 +163,21 @@ mod tests {
                         ]),
                         title_color: Some("peach".into()),
                         label: Some("5/10".into()),
+                        label_spans: Some(vec![
+                            SectionSpan {
+                                text: "5/10 ".into(),
+                                color: None,
+                                bold: false,
+                                dim: false,
+                            },
+                            SectionSpan {
+                                text: "↻ 30m".into(),
+                                color: Some("#c8d0dc".into()),
+                                bold: true,
+                                dim: false,
+                            },
+                        ]),
+                        match_values: vec!["http://broker-a".into(), "http://broker-b".into(),],
                         fill: Some("#123456".into()),
                         empty: Some("subtext0".into()),
                     },

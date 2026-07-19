@@ -875,6 +875,9 @@ pub struct UiConfig {
     pub sidebar_start_collapsed: bool,
     /// Collapsed sidebar presentation. Default: compact.
     pub sidebar_collapsed_mode: SidebarCollapsedModeConfig,
+    /// Default height of the expanded custom-sections region. Dragging its
+    /// divider persists a session-specific override. Default: 8.
+    pub sidebar_sections_height: u16,
     /// Terminal width at or below which Herdr uses the mobile single-column layout. Default: 64.
     pub mobile_width_threshold: u16,
     /// Capture mouse input for Herdr's mouse UI. Default: true.
@@ -1613,6 +1616,7 @@ impl Default for UiConfig {
             sidebar_max_width: 36,
             sidebar_start_collapsed: false,
             sidebar_collapsed_mode: SidebarCollapsedModeConfig::Compact,
+            sidebar_sections_height: super::DEFAULT_SIDEBAR_SECTIONS_HEIGHT,
             mobile_width_threshold: DEFAULT_MOBILE_WIDTH_THRESHOLD,
             mouse_capture: true,
             copy_on_select: true,
@@ -2091,10 +2095,14 @@ cjk_ime_agents = ["claude", "codex"]
     }
 
     #[test]
-    fn sidebar_bounds_default_and_parse() {
+    fn sidebar_bounds_and_sections_height_default_and_parse() {
         let default_config = Config::default();
         assert_eq!(default_config.ui.sidebar_min_width, 18);
         assert_eq!(default_config.ui.sidebar_max_width, 36);
+        assert_eq!(
+            default_config.ui.sidebar_sections_height,
+            crate::config::DEFAULT_SIDEBAR_SECTIONS_HEIGHT
+        );
         assert_eq!(
             default_config.ui.mobile_width_threshold,
             DEFAULT_MOBILE_WIDTH_THRESHOLD
@@ -2104,11 +2112,13 @@ cjk_ime_agents = ["claude", "codex"]
 [ui]
 sidebar_min_width = 12
 sidebar_max_width = 80
+sidebar_sections_height = 14
 mobile_width_threshold = 96
 "#;
         let config: Config = toml::from_str(toml).unwrap();
         assert_eq!(config.ui.sidebar_min_width, 12);
         assert_eq!(config.ui.sidebar_max_width, 80);
+        assert_eq!(config.ui.sidebar_sections_height, 14);
         assert_eq!(config.ui.mobile_width_threshold, 96);
     }
 

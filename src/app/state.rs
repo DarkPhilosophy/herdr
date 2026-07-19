@@ -1869,6 +1869,7 @@ pub(crate) enum DragTarget {
     },
     SidebarDivider,
     SidebarSectionDivider,
+    SidebarSectionsDivider,
 }
 
 /// Active mouse drag on a split border or sidebar divider.
@@ -2054,6 +2055,13 @@ pub enum SidebarWidthSource {
     Manual,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SidebarSectionsHeightSource {
+    ConfigDefault,
+    Persisted,
+    Manual,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PaneFocusTarget {
     pub workspace_id: String,
@@ -2162,6 +2170,10 @@ pub struct AppState {
     pub sidebar_collapsed_mode: crate::config::SidebarCollapsedModeConfig,
     /// Ratio of sidebar height allocated to the workspaces section.
     pub sidebar_section_split: f32,
+    pub default_sidebar_sections_height: u16,
+    /// Height of the bottom custom-sections region, including its divider.
+    pub sidebar_sections_height: u16,
+    pub sidebar_sections_height_source: SidebarSectionsHeightSource,
     pub agent_panel_sort: AgentPanelSort,
     pub agent_panel_scope: AgentPanelScope,
     pub status_indicators: crate::config::StatusIndicatorStyle,
@@ -2597,6 +2609,9 @@ impl AppState {
             sidebar_collapsed: false,
             sidebar_collapsed_mode: crate::config::SidebarCollapsedModeConfig::Compact,
             sidebar_section_split: 0.5,
+            default_sidebar_sections_height: crate::config::DEFAULT_SIDEBAR_SECTIONS_HEIGHT,
+            sidebar_sections_height: crate::config::DEFAULT_SIDEBAR_SECTIONS_HEIGHT,
+            sidebar_sections_height_source: SidebarSectionsHeightSource::ConfigDefault,
             agent_panel_sort: AgentPanelSort::Spaces,
             agent_panel_scope: AgentPanelScope::AllWorkspaces,
             status_indicators: crate::config::StatusIndicatorStyle::Dots,

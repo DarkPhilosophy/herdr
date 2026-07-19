@@ -1294,6 +1294,7 @@ impl HeadlessServer {
             self.app.state.agent_panel_scope,
             self.app.state.sidebar_width,
             self.app.state.sidebar_section_split,
+            self.app.state.sidebar_sections_height,
             self.app.state.collapsed_space_keys.clone(),
             self.app.state.remote_registry.clone(),
             // #37: carry the cumulative pane-id alias map across the live handoff so an agent's

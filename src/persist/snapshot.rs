@@ -27,6 +27,8 @@ pub struct SessionSnapshot {
     #[serde(default)]
     pub sidebar_section_split: Option<f32>,
     #[serde(default)]
+    pub sidebar_sections_height: Option<u16>,
+    #[serde(default)]
     pub collapsed_space_keys: std::collections::HashSet<String>,
     #[serde(default)]
     pub remote_registry: crate::remote_registry::RemoteRegistrySnapshot,
@@ -197,6 +199,8 @@ struct RawSessionSnapshot {
     #[serde(default)]
     sidebar_section_split: Option<f32>,
     #[serde(default)]
+    sidebar_sections_height: Option<u16>,
+    #[serde(default)]
     collapsed_space_keys: std::collections::HashSet<String>,
     #[serde(default)]
     remote_registry: crate::remote_registry::RemoteRegistrySnapshot,
@@ -217,6 +221,7 @@ fn migrate_snapshot(raw: RawSessionSnapshot) -> Result<SessionSnapshot, String> 
         agent_panel_scope: raw.agent_panel_scope,
         sidebar_width: raw.sidebar_width,
         sidebar_section_split: raw.sidebar_section_split,
+        sidebar_sections_height: raw.sidebar_sections_height,
         collapsed_space_keys: raw.collapsed_space_keys,
         remote_registry: raw.remote_registry,
         pane_id_aliases: raw.pane_id_aliases,
@@ -282,6 +287,7 @@ pub fn capture(
     agent_panel_scope: crate::app::state::AgentPanelScope,
     sidebar_width: u16,
     sidebar_section_split: f32,
+    sidebar_sections_height: u16,
     collapsed_space_keys: std::collections::HashSet<String>,
     remote_registry: crate::remote_registry::RemoteRegistrySnapshot,
     pane_id_aliases: &std::collections::HashMap<u32, crate::layout::PaneId>,
@@ -297,6 +303,7 @@ pub fn capture(
         agent_panel_scope,
         sidebar_width: Some(sidebar_width),
         sidebar_section_split: Some(sidebar_section_split),
+        sidebar_sections_height: Some(sidebar_sections_height),
         collapsed_space_keys,
         remote_registry,
         // #37: lower the app's live alias map (orig spawn raw -> current PaneId) to the wire form
@@ -573,6 +580,7 @@ mod tests {
             state.agent_panel_scope,
             state.sidebar_width,
             state.sidebar_section_split,
+            state.sidebar_sections_height,
             state.collapsed_space_keys.clone(),
             state.remote_registry.clone(),
             &state.pane_id_aliases,
@@ -641,6 +649,7 @@ mod tests {
             agent_panel_scope: Default::default(),
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
+            sidebar_sections_height: Some(8),
             collapsed_space_keys: std::collections::HashSet::new(),
             remote_registry: crate::remote_registry::RemoteRegistrySnapshot::default(),
         };
@@ -650,6 +659,7 @@ mod tests {
         assert_eq!(restored.active, None);
         assert_eq!(restored.sidebar_width, Some(26));
         assert_eq!(restored.sidebar_section_split, Some(0.5));
+        assert_eq!(restored.sidebar_sections_height, Some(8));
     }
 
     #[test]
@@ -784,6 +794,7 @@ mod tests {
             agent_panel_scope: Default::default(),
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
+            sidebar_sections_height: Some(8),
             collapsed_space_keys: std::collections::HashSet::new(),
             version: SNAPSHOT_VERSION,
             remote_registry: crate::remote_registry::RemoteRegistrySnapshot::default(),
@@ -1349,6 +1360,7 @@ mod tests {
             agent_panel_scope: Default::default(),
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
+            sidebar_sections_height: Some(8),
             collapsed_space_keys: std::collections::HashSet::new(),
             remote_registry: crate::remote_registry::RemoteRegistrySnapshot::default(),
         };

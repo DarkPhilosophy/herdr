@@ -49,6 +49,7 @@ impl App {
                 self.state.agent_panel_scope,
                 self.state.sidebar_width,
                 self.state.sidebar_section_split,
+                self.state.sidebar_sections_height,
                 self.state.collapsed_space_keys.clone(),
                 self.state.remote_registry.clone(),
                 // #37: persist the cumulative pane-id alias map so agent hook ids survive handoff.

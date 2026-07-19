@@ -10,7 +10,7 @@ impl AppState {
         if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
             return Rect::default();
         }
-        crate::ui::workspace_list_rect(sidebar, self.sidebar_section_split)
+        crate::ui::sidebar_regions_layout(self, sidebar).workspace_area
     }
 
     pub(crate) fn agent_panel_rect(&self) -> Rect {
@@ -18,9 +18,7 @@ impl AppState {
         if self.sidebar_collapsed || sidebar.width <= 1 || sidebar.height == 0 {
             return Rect::default();
         }
-        let (_, detail_area) =
-            crate::ui::expanded_sidebar_sections(sidebar, self.sidebar_section_split);
-        crate::ui::sidebar_sections_layout(self, detail_area).agent_area
+        crate::ui::sidebar_regions_layout(self, sidebar).agent_area
     }
 
     pub(super) fn workspace_list_scrollbar_target_at(
@@ -256,7 +254,7 @@ impl AppState {
         let rect = if self.sidebar_collapsed {
             crate::ui::collapsed_sidebar_toggle_rect(self.view.sidebar_rect)
         } else {
-            crate::ui::expanded_sidebar_toggle_rect_for_state(self, self.view.sidebar_rect)
+            crate::ui::expanded_sidebar_toggle_rect(self.view.sidebar_rect)
         };
         rect.width > 0
             && col >= rect.x
@@ -277,10 +275,7 @@ impl AppState {
         if self.sidebar_collapsed {
             return false;
         }
-        let rect = crate::ui::sidebar_section_divider_rect(
-            self.view.sidebar_rect,
-            self.sidebar_section_split,
-        );
+        let rect = crate::ui::spaces_agents_divider_rect(self, self.view.sidebar_rect);
         rect.width > 0
             && col >= rect.x
             && col < rect.x + rect.width
@@ -290,13 +285,40 @@ impl AppState {
 
     pub(super) fn set_sidebar_section_split(&mut self, row: u16) {
         let sidebar = self.view.sidebar_rect;
-        let content_height = sidebar.height;
+        let sections_height = crate::ui::sidebar_regions_layout(self, sidebar)
+            .sections_area
+            .height;
+        let content_height = sidebar.height.saturating_sub(sections_height);
         if content_height < 6 {
             return;
         }
         let relative_y = row.saturating_sub(sidebar.y);
         let ratio = (relative_y as f32) / (content_height as f32);
         self.sidebar_section_split = ratio.clamp(0.1, 0.9);
+        self.mark_session_dirty();
+    }
+
+    pub(super) fn on_sidebar_sections_divider(&self, col: u16, row: u16) -> bool {
+        if self.sidebar_collapsed {
+            return false;
+        }
+        let rect = crate::ui::sidebar_sections_divider_rect(self, self.view.sidebar_rect);
+        rect.width > 0
+            && col >= rect.x
+            && col < rect.x + rect.width
+            && row >= rect.y
+            && row < rect.y + rect.height
+    }
+
+    pub(super) fn set_sidebar_sections_height(&mut self, row: u16) {
+        let sidebar = self.view.sidebar_rect;
+        let Some((min, max)) = crate::ui::sidebar_sections_height_bounds(self, sidebar) else {
+            return;
+        };
+        let bottom = sidebar.y.saturating_add(sidebar.height);
+        self.sidebar_sections_height = bottom.saturating_sub(row).clamp(min, max);
+        self.sidebar_sections_height_source =
+            crate::app::state::SidebarSectionsHeightSource::Manual;
         self.mark_session_dirty();
     }
 
@@ -471,10 +493,7 @@ impl AppState {
             return false;
         }
 
-        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
-            self.view.sidebar_rect,
-            self.sidebar_section_split,
-        );
+        let detail_area = self.agent_panel_rect();
         let rect = crate::ui::agent_panel_toggle_rect(detail_area, self.agent_panel_sort);
         rect.width > 0
             && col >= rect.x
@@ -1492,13 +1511,14 @@ mod tests {
     }
 
     #[test]
-    fn custom_section_rows_are_inert_and_move_the_expanded_toggle_above_them() {
+    fn custom_sections_keep_collapse_toggle_at_sidebar_bottom_right() {
         let mut app = app_for_mouse_test();
-        app.state.sidebar_sections_config = vec![crate::config::CustomSidebarSectionConfig {
+        app.state.sidebar_sections_config = vec![CustomSidebarSectionConfig {
             id: "build".into(),
             title: Some("build".into()),
             max_rows: 6,
-            placement: crate::config::SidebarSectionPlacement::BelowAgents,
+            placement: SidebarSectionPlacement::BelowAgents,
+            highlight_token: None,
         }];
         app.state
             .sidebar_section_reports
@@ -1507,40 +1527,32 @@ mod tests {
                 "test",
                 None,
                 None,
-                vec![crate::api::schema::SectionRow::Spans {
-                    spans: vec![crate::api::schema::SectionSpan {
-                        text: "ready".into(),
-                        color: None,
-                        bold: false,
-                        dim: false,
-                    }],
+                vec![SectionRow::Spans {
+                    spans: Vec::new(),
                     right: Vec::new(),
                 }],
-                std::time::Instant::now(),
+                Instant::now(),
             )
             .unwrap();
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 20));
-        let old_toggle = crate::ui::expanded_sidebar_toggle_rect(app.state.view.sidebar_rect);
-        let relocated_toggle = crate::ui::expanded_sidebar_toggle_rect_for_state(
-            &app.state,
-            app.state.view.sidebar_rect,
+
+        let toggle = crate::ui::expanded_sidebar_toggle_rect(app.state.view.sidebar_rect);
+        assert_eq!(
+            toggle.y,
+            app.state.view.sidebar_rect.y + app.state.view.sidebar_rect.height - 1
         );
-        assert!(relocated_toggle.y < old_toggle.y);
+        assert_eq!(
+            toggle.x,
+            app.state.view.sidebar_rect.x + app.state.view.sidebar_rect.width - 2
+        );
 
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
-            old_toggle.x,
-            old_toggle.y,
-        ));
-        assert!(!app.state.sidebar_collapsed);
-        assert!(app.state.drag.is_none());
-
-        app.handle_mouse(mouse(
-            MouseEventKind::Down(MouseButton::Left),
-            relocated_toggle.x,
-            relocated_toggle.y,
+            toggle.x,
+            toggle.y,
         ));
         assert!(app.state.sidebar_collapsed);
+        assert!(app.state.drag.is_none());
     }
 
     #[test]
@@ -2144,13 +2156,14 @@ mod tests {
     }
 
     #[test]
-    fn dragging_custom_section_divider_is_inert() {
+    fn dragging_custom_sections_divider_resizes_and_persists_the_bottom_region() {
         let mut app = app_for_mouse_test();
         app.state.sidebar_sections_config = vec![CustomSidebarSectionConfig {
             id: "usage".into(),
             title: Some("usage".into()),
             max_rows: 3,
             placement: SidebarSectionPlacement::BelowAgents,
+            highlight_token: None,
         }];
         assert_eq!(
             app.state.sidebar_section_reports.report(
@@ -2167,34 +2180,59 @@ mod tests {
             Ok(true)
         );
         crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 32));
-        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
-            app.state.view.sidebar_rect,
-            app.state.sidebar_section_split,
-        );
-        let before = crate::ui::sidebar_sections_layout(&app.state, detail_area);
-        let divider_row = before.sections_area.y;
-        let original_split = app.state.sidebar_section_split;
+        let sidebar = app.state.view.sidebar_rect;
+        let before = crate::ui::sidebar_regions_layout(&app.state, sidebar);
+        let divider = crate::ui::sidebar_sections_divider_rect(&app.state, sidebar);
+        let spaces_divider = crate::ui::spaces_agents_divider_rect(&app.state, sidebar);
+
+        assert!(!app
+            .state
+            .on_sidebar_sections_divider(sidebar.x + sidebar.width - 1, divider.y));
+        assert!(!app
+            .state
+            .on_sidebar_sections_divider(divider.x + 1, spaces_divider.y));
 
         app.handle_mouse(mouse(
             MouseEventKind::Down(MouseButton::Left),
-            before.sections_area.x + 1,
-            divider_row,
+            divider.x + 1,
+            divider.y,
+        ));
+        assert!(matches!(
+            app.state.drag.as_ref().map(|drag| &drag.target),
+            Some(DragTarget::SidebarSectionsDivider)
         ));
         app.handle_mouse(mouse(
             MouseEventKind::Drag(MouseButton::Left),
-            before.sections_area.x + 1,
-            divider_row.saturating_sub(3),
+            divider.x + 1,
+            divider.y.saturating_sub(3),
+        ));
+        app.handle_mouse(mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            divider.x + 1,
+            divider.y.saturating_sub(3),
         ));
 
-        assert!(app.state.drag.is_none());
-        assert_eq!(app.state.sidebar_section_split, original_split);
-        let (_, detail_area_after) = crate::ui::expanded_sidebar_sections(
-            app.state.view.sidebar_rect,
-            app.state.sidebar_section_split,
+        let resized = crate::ui::sidebar_regions_layout(&app.state, sidebar);
+        assert_eq!(
+            resized.sections_area.height,
+            before.sections_area.height + 3
         );
-        let after = crate::ui::sidebar_sections_layout(&app.state, detail_area_after);
-        assert_eq!(after.agent_area.height, before.agent_area.height);
-        assert_eq!(after.sections_area.height, before.sections_area.height);
+        assert!(resized.workspace_area.height < before.workspace_area.height);
+        assert!(resized.agent_area.height < before.agent_area.height);
+        assert_eq!(
+            capture_snapshot(&app.state).sidebar_sections_height,
+            Some(app.state.sidebar_sections_height)
+        );
+
+        app.state.set_sidebar_sections_height(sidebar.y);
+        let maximized = crate::ui::sidebar_regions_layout(&app.state, sidebar);
+        assert!(maximized.workspace_area.height >= 3);
+        assert!(maximized.agent_area.height >= 3);
+
+        app.state
+            .set_sidebar_sections_height(sidebar.y + sidebar.height);
+        let minimized = crate::ui::sidebar_regions_layout(&app.state, sidebar);
+        assert_eq!(minimized.sections_area.height, 3);
     }
 
     #[test]

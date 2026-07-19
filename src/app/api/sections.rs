@@ -8,6 +8,8 @@ use super::responses::{encode_error, encode_success};
 const MAX_SECTION_ROWS: usize = 24;
 const MAX_SECTION_SPANS: usize = 8;
 const MAX_SECTION_TEXT_CHARS: usize = 240;
+const MAX_SECTION_MATCH_VALUES: usize = 8;
+const MAX_SECTION_MATCH_VALUE_CHARS: usize = 200;
 
 impl App {
     pub(super) fn handle_sidebar_report_section(
@@ -100,9 +102,17 @@ fn normalize_section_rows(
                 bar: SectionBar {
                     fraction: bar.fraction.clamp(0.0, 1.0),
                     title: bar.title.as_deref().and_then(normalize_bar_layout_text),
-                    title_spans: bar.title_spans.map(normalize_bar_title_spans).transpose()?,
+                    title_spans: bar
+                        .title_spans
+                        .map(|spans| normalize_bar_spans(spans, "title"))
+                        .transpose()?,
                     title_color: normalize_section_color(bar.title_color)?,
                     label: bar.label.as_deref().and_then(normalize_bar_layout_text),
+                    label_spans: bar
+                        .label_spans
+                        .map(|spans| normalize_bar_spans(spans, "label"))
+                        .transpose()?,
+                    match_values: normalize_bar_match_values(bar.match_values)?,
                     fill: normalize_section_color(bar.fill)?,
                     empty: normalize_section_color(bar.empty)?,
                 },
@@ -111,14 +121,13 @@ fn normalize_section_rows(
         .collect()
 }
 
-/// Bar titles, title spans, and labels are column-layout-bearing: publishers
-/// align grids with deliberate padding, so preserve whitespace while removing
-/// controls.
-fn normalize_bar_layout_text(text: &str) -> Option<String> {
+/// Bar titles, labels, their styled spans, and match values are layout-bearing:
+/// preserve deliberate whitespace while stripping controls and bounding input.
+fn normalize_layout_text(text: &str, max_chars: usize) -> Option<String> {
     let normalized = text
         .chars()
         .filter(|ch| !ch.is_control())
-        .take(MAX_SECTION_TEXT_CHARS)
+        .take(max_chars)
         .collect::<String>();
     normalized
         .chars()
@@ -126,13 +135,18 @@ fn normalize_bar_layout_text(text: &str) -> Option<String> {
         .then_some(normalized)
 }
 
-fn normalize_bar_title_spans(
+fn normalize_bar_layout_text(text: &str) -> Option<String> {
+    normalize_layout_text(text, MAX_SECTION_TEXT_CHARS)
+}
+
+fn normalize_bar_spans(
     spans: Vec<SectionSpan>,
+    field: &'static str,
 ) -> Result<Vec<SectionSpan>, (&'static str, String)> {
     if spans.len() > MAX_SECTION_SPANS {
         return Err((
             "invalid_sidebar_section_spans",
-            format!("a sidebar bar title may contain at most {MAX_SECTION_SPANS} spans"),
+            format!("a sidebar bar {field} may contain at most {MAX_SECTION_SPANS} spans"),
         ));
     }
 
@@ -147,6 +161,20 @@ fn normalize_bar_title_spans(
             })
         })
         .collect()
+}
+
+fn normalize_bar_match_values(values: Vec<String>) -> Result<Vec<String>, (&'static str, String)> {
+    if values.len() > MAX_SECTION_MATCH_VALUES {
+        return Err((
+            "invalid_sidebar_section_match_values",
+            format!("a sidebar bar may contain at most {MAX_SECTION_MATCH_VALUES} match values"),
+        ));
+    }
+
+    Ok(values
+        .into_iter()
+        .filter_map(|value| normalize_layout_text(&value, MAX_SECTION_MATCH_VALUE_CHARS))
+        .collect())
 }
 
 fn normalize_section_spans(
@@ -347,6 +375,8 @@ mod tests {
                         title_spans: None,
                         title_color: None,
                         label: None,
+                        label_spans: None,
+                        match_values: Vec::new(),
                         fill: Some("cyan".into()),
                         empty: None,
                     },
@@ -372,6 +402,8 @@ mod tests {
                             title_spans: None,
                             title_color: Some(color.into()),
                             label: None,
+                            label_spans: None,
+                            match_values: Vec::new(),
                             fill: None,
                             empty: None,
                         },
@@ -402,6 +434,8 @@ mod tests {
                         title_spans: None,
                         title_color: Some("cyan".into()),
                         label: None,
+                        label_spans: None,
+                        match_values: Vec::new(),
                         fill: None,
                         empty: None,
                     },
@@ -452,6 +486,21 @@ mod tests {
                     ]),
                     title_color: None,
                     label: Some("  5% \u{21bb}  30m".into()),
+                    label_spans: Some(vec![
+                        SectionSpan {
+                            text: "  5%\n".into(),
+                            color: Some("subtext0".into()),
+                            bold: false,
+                            dim: false,
+                        },
+                        SectionSpan {
+                            text: " \u{21bb}\t  30m".into(),
+                            color: Some("#c8d0dc".into()),
+                            bold: true,
+                            dim: false,
+                        },
+                    ]),
+                    match_values: vec!["http://broker-a\n".into(), "\t ".into()],
                     fill: None,
                     empty: None,
                 },
@@ -463,6 +512,8 @@ mod tests {
                     title_spans: None,
                     title_color: None,
                     label: Some("  4\n2%\t \u{21bb} 30m".into()),
+                    label_spans: None,
+                    match_values: Vec::new(),
                     fill: None,
                     empty: None,
                 },
@@ -474,6 +525,8 @@ mod tests {
                     title_spans: None,
                     title_color: None,
                     label: Some("\t \n".into()),
+                    label_spans: None,
+                    match_values: Vec::new(),
                     fill: None,
                     empty: None,
                 },
@@ -492,6 +545,13 @@ mod tests {
         assert!(title_spans[0].dim);
         assert_eq!(title_spans[1].text, "7d fa");
         assert!(!title_spans[1].dim);
+        let label_spans = padded.label_spans.as_deref().expect("styled label");
+        assert_eq!(label_spans[0].text, "  5%");
+        assert_eq!(label_spans[0].color.as_deref(), Some("subtext0"));
+        assert_eq!(label_spans[1].text, " \u{21bb}  30m");
+        assert_eq!(label_spans[1].color.as_deref(), Some("#c8d0dc"));
+        assert!(label_spans[1].bold);
+        assert_eq!(padded.match_values, ["http://broker-a"]);
 
         let SectionRow::Bar { bar: stripped } = &rows[1] else {
             panic!("control-stripped bar");
@@ -511,7 +571,7 @@ mod tests {
             Some("x".repeat(MAX_SECTION_TEXT_CHARS))
         );
 
-        let too_many = normalize_bar_title_spans(
+        let too_many = normalize_bar_spans(
             std::iter::repeat_n(
                 SectionSpan {
                     text: "x".into(),
@@ -522,18 +582,28 @@ mod tests {
                 MAX_SECTION_SPANS + 1,
             )
             .collect(),
+            "title_spans",
         )
         .unwrap_err();
         assert_eq!(too_many.0, "invalid_sidebar_section_spans");
 
-        let invalid_color = normalize_bar_title_spans(vec![SectionSpan {
-            text: "x".into(),
-            color: Some("cyan".into()),
-            bold: false,
-            dim: false,
-        }])
+        let invalid_color = normalize_bar_spans(
+            vec![SectionSpan {
+                text: "x".into(),
+                color: Some("cyan".into()),
+                bold: false,
+                dim: false,
+            }],
+            "title_spans",
+        )
         .unwrap_err();
         assert_eq!(invalid_color.0, "invalid_sidebar_section_color");
+
+        let too_many_matches = normalize_bar_match_values(
+            std::iter::repeat_n("broker".to_string(), MAX_SECTION_MATCH_VALUES + 1).collect(),
+        )
+        .unwrap_err();
+        assert_eq!(too_many_matches.0, "invalid_sidebar_section_match_values");
     }
 
     #[test]
@@ -565,6 +635,8 @@ mod tests {
                             title_spans: None,
                             title_color: None,
                             label: Some("  10\n jobs  ".into()),
+                            label_spans: None,
+                            match_values: Vec::new(),
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
                         },
@@ -576,6 +648,8 @@ mod tests {
                             title_spans: None,
                             title_color: None,
                             label: None,
+                            label_spans: None,
+                            match_values: Vec::new(),
                             fill: None,
                             empty: None,
                         },
@@ -610,6 +684,8 @@ mod tests {
                             title_spans: None,
                             title_color: None,
                             label: Some("  10 jobs  ".into()),
+                            label_spans: None,
+                            match_values: Vec::new(),
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
                         },
@@ -621,6 +697,8 @@ mod tests {
                             title_spans: None,
                             title_color: None,
                             label: None,
+                            label_spans: None,
+                            match_values: Vec::new(),
                             fill: None,
                             empty: None,
                         },
