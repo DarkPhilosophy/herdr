@@ -38,6 +38,186 @@ pub struct AgentDetection {
     pub visible_working: bool,
 }
 
+/// Static metadata describing one known agent.
+///
+/// This is the single source of truth for agent identity: labels, the
+/// interactive executable name, and lookup aliases all live here. Adding a
+/// new agent means adding one enum variant plus one registry entry (and a
+/// detection manifest under `manifests/` when the agent has screen chrome).
+pub struct AgentInfo {
+    pub agent: Agent,
+    /// Canonical label used in hooks, metadata, and the sidebar.
+    pub label: &'static str,
+    /// Binary name used when herdr launches the agent interactively.
+    pub executable: &'static str,
+    /// Additional names accepted when parsing process names and labels.
+    pub aliases: &'static [&'static str],
+    /// Whether the agent has a bundled screen-detection manifest.
+    pub has_screen_manifest: bool,
+}
+
+/// Registry of every known agent, in enum declaration order.
+///
+/// `Agent::ALL`, `Agent::SCREEN_MANIFEST_AGENTS`, `agent_label`,
+/// `interactive_agent_executable`, and label lookup are all derived from
+/// this table, so per-agent data can never drift between match arms.
+pub const AGENT_REGISTRY: &[AgentInfo] = &[
+    AgentInfo {
+        agent: Agent::Pi,
+        label: "pi",
+        executable: "pi",
+        aliases: &[],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Claude,
+        label: "claude",
+        executable: "claude",
+        aliases: &["claude-code"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Codex,
+        label: "codex",
+        executable: "codex",
+        aliases: &[],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Gemini,
+        label: "gemini",
+        executable: "gemini",
+        aliases: &[],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Cursor,
+        label: "cursor",
+        executable: "cursor-agent",
+        aliases: &["cursor-agent"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Devin,
+        label: "devin",
+        executable: "devin",
+        aliases: &["devin-cli", "devin cli"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Antigravity,
+        label: "agy",
+        executable: "agy",
+        aliases: &["antigravity", "antigravity-cli"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Cline,
+        label: "cline",
+        executable: "cline",
+        aliases: &[],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Omp,
+        label: "omp",
+        executable: "omp",
+        aliases: &[],
+        has_screen_manifest: false,
+    },
+    AgentInfo {
+        agent: Agent::Mastracode,
+        label: "mastracode",
+        executable: "mastracode",
+        aliases: &["mastra-code", "mastra code"],
+        has_screen_manifest: false,
+    },
+    AgentInfo {
+        agent: Agent::OpenCode,
+        label: "opencode",
+        executable: "opencode",
+        aliases: &["open-code"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::GithubCopilot,
+        label: "copilot",
+        executable: "copilot",
+        aliases: &["github-copilot", "ghcs"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Kimi,
+        label: "kimi",
+        executable: "kimi",
+        aliases: &["kimi-code", "kimi code"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Kiro,
+        label: "kiro",
+        executable: "kiro-cli",
+        aliases: &["kiro-cli"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Droid,
+        label: "droid",
+        executable: "droid",
+        aliases: &[],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Amp,
+        label: "amp",
+        executable: "amp",
+        aliases: &["amp-local"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Grok,
+        label: "grok",
+        executable: "grok",
+        aliases: &["grok-build"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Hermes,
+        label: "hermes",
+        executable: "hermes",
+        aliases: &["hermes-agent"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Kilo,
+        label: "kilo",
+        executable: "kilo",
+        aliases: &["kilo-code", "kilo code"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Qodercli,
+        label: "qodercli",
+        executable: "qodercli",
+        aliases: &["qoderclicn", "qoder", "qodercn"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Maki,
+        label: "maki",
+        executable: "maki",
+        aliases: &[],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Jcode,
+        label: "jcode",
+        executable: "jcode",
+        aliases: &[],
+        has_screen_manifest: true,
+    },
+];
+
 /// Which agent we detected running in a pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Agent {
@@ -67,117 +247,62 @@ pub enum Agent {
 }
 
 impl Agent {
-    pub const ALL: [Self; 22] = [
-        Self::Pi,
-        Self::Claude,
-        Self::Codex,
-        Self::Gemini,
-        Self::Cursor,
-        Self::Devin,
-        Self::Antigravity,
-        Self::Cline,
-        Self::Omp,
-        Self::Mastracode,
-        Self::OpenCode,
-        Self::GithubCopilot,
-        Self::Kimi,
-        Self::Kiro,
-        Self::Droid,
-        Self::Amp,
-        Self::Grok,
-        Self::Hermes,
-        Self::Kilo,
-        Self::Qodercli,
-        Self::Qwen,
-        Self::Maki,
-        Self::Jcode,
-    ];
+    /// Every known agent, derived from `AGENT_REGISTRY`.
+    pub const ALL: [Self; AGENT_REGISTRY.len()] = {
+        let mut all = [Self::Pi; AGENT_REGISTRY.len()];
+        let mut i = 0;
+        while i < AGENT_REGISTRY.len() {
+            all[i] = AGENT_REGISTRY[i].agent;
+            i += 1;
+        }
+        all
+    };
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 20] = [
-        Self::Pi,
-        Self::Claude,
-        Self::Codex,
-        Self::Gemini,
-        Self::Cursor,
-        Self::Devin,
-        Self::Antigravity,
-        Self::Cline,
-        Self::OpenCode,
-        Self::GithubCopilot,
-        Self::Kimi,
-        Self::Kiro,
-        Self::Droid,
-        Self::Amp,
-        Self::Grok,
-        Self::Hermes,
-        Self::Kilo,
-        Self::Qodercli,
-        Self::Qwen,
-        Self::Maki,
-        Self::Jcode,
-    ];
+    /// Agents with a bundled screen-detection manifest, derived from
+    /// `AGENT_REGISTRY`.
+    pub const SCREEN_MANIFEST_AGENTS: &[Self] = {
+        // Const-evaluated filter: count manifests first, then fill.
+        const COUNT: usize = {
+            let mut n = 0;
+            let mut i = 0;
+            while i < AGENT_REGISTRY.len() {
+                if AGENT_REGISTRY[i].has_screen_manifest {
+                    n += 1;
+                }
+                i += 1;
+            }
+            n
+        };
+        const FILTERED: [Agent; COUNT] = {
+            let mut out = [Agent::Pi; COUNT];
+            let mut i = 0;
+            let mut j = 0;
+            while i < AGENT_REGISTRY.len() {
+                if AGENT_REGISTRY[i].has_screen_manifest {
+                    out[j] = AGENT_REGISTRY[i].agent;
+                    j += 1;
+                }
+                i += 1;
+            }
+            out
+        };
+        &FILTERED
+    };
+
+    /// Registry metadata for this agent.
+    pub fn info(self) -> &'static AgentInfo {
+        // AGENT_REGISTRY is in enum declaration order, so the discriminant
+        // indexes it directly.
+        &AGENT_REGISTRY[self as usize]
+    }
 }
 
 pub fn agent_label(agent: Agent) -> &'static str {
-    match agent {
-        Agent::Pi => "pi",
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-        Agent::Gemini => "gemini",
-        Agent::Cursor => "cursor",
-        Agent::Devin => "devin",
-        Agent::Antigravity => "agy",
-        Agent::Cline => "cline",
-        Agent::Omp => "omp",
-        Agent::Mastracode => "mastracode",
-        Agent::OpenCode => "opencode",
-        Agent::GithubCopilot => "copilot",
-        Agent::Kimi => "kimi",
-        Agent::Kiro => "kiro",
-        Agent::Droid => "droid",
-        Agent::Amp => "amp",
-        Agent::Grok => "grok",
-        Agent::Hermes => "hermes",
-        Agent::Kilo => "kilo",
-        Agent::Qodercli => "qodercli",
-        Agent::Qwen => "qwen",
-        Agent::Maki => "maki",
-        Agent::Jcode => "jcode",
-    }
+    agent.info().label
 }
 
 pub fn interactive_agent_executable(agent: Agent) -> &'static str {
-    match agent {
-        Agent::Pi => "pi",
-        Agent::Claude => "claude",
-        Agent::Codex => "codex",
-        Agent::Gemini => "gemini",
-        Agent::Cursor => {
-            if cfg!(windows) {
-                "cursor-agent.cmd"
-            } else {
-                "cursor-agent"
-            }
-        }
-        Agent::Devin => "devin",
-        Agent::Antigravity => "agy",
-        Agent::Cline => "cline",
-        Agent::Omp => "omp",
-        Agent::Mastracode => "mastracode",
-        Agent::OpenCode => "opencode",
-        Agent::GithubCopilot => "copilot",
-        Agent::Kimi => "kimi",
-        Agent::Kiro => "kiro-cli",
-        Agent::Droid => "droid",
-        Agent::Amp => "amp",
-        Agent::Grok => "grok",
-        Agent::Hermes => "hermes",
-        Agent::Kilo => "kilo",
-        Agent::Qodercli => "qodercli",
-        Agent::Qwen => "qwen",
-        Agent::Maki => "maki",
-        Agent::Jcode => "jcode",
-    }
+    agent.info().executable
 }
 
 pub fn parse_agent_label(agent: &str) -> Option<Agent> {
@@ -191,32 +316,10 @@ pub(crate) fn parse_canonical_agent_label(label: &str) -> Option<Agent> {
 }
 
 fn lookup_agent(name: &str) -> Option<Agent> {
-    match name {
-        "pi" => Some(Agent::Pi),
-        "claude" | "claude-code" => Some(Agent::Claude),
-        "codex" => Some(Agent::Codex),
-        "gemini" => Some(Agent::Gemini),
-        "cursor" | "cursor-agent" => Some(Agent::Cursor),
-        "devin" | "devin-cli" | "devin cli" => Some(Agent::Devin),
-        "agy" | "antigravity" | "antigravity-cli" => Some(Agent::Antigravity),
-        "cline" => Some(Agent::Cline),
-        "omp" => Some(Agent::Omp),
-        "mastracode" | "mastra-code" | "mastra code" => Some(Agent::Mastracode),
-        "opencode" | "opencode2" | "open-code" => Some(Agent::OpenCode),
-        "copilot" | "github-copilot" | "ghcs" => Some(Agent::GithubCopilot),
-        "kimi" | "kimi-code" | "kimi code" => Some(Agent::Kimi),
-        "kiro" | "kiro-cli" => Some(Agent::Kiro),
-        "droid" => Some(Agent::Droid),
-        "amp" | "amp-local" => Some(Agent::Amp),
-        "grok" | "grok-build" => Some(Agent::Grok),
-        "hermes" | "hermes-agent" => Some(Agent::Hermes),
-        "kilo" | "kilo-code" | "kilo code" => Some(Agent::Kilo),
-        "qodercli" | "qoderclicn" | "qoder" | "qodercn" => Some(Agent::Qodercli),
-        "qwen" | "qwen-code" | "qwen code" => Some(Agent::Qwen),
-        "maki" => Some(Agent::Maki),
-        "jcode" => Some(Agent::Jcode),
-        _ => None,
-    }
+    AGENT_REGISTRY
+        .iter()
+        .find(|info| info.label == name || info.aliases.contains(&name))
+        .map(|info| info.agent)
 }
 
 /// Identify which agent is running from the process name.
@@ -703,6 +806,41 @@ mod tests {
     }
 
     // ---- Agent identification ----
+
+    #[test]
+    fn registry_stays_in_enum_declaration_order() {
+        // Agent::info() indexes AGENT_REGISTRY by discriminant, so any drift
+        // between enum order and registry order mislabels every agent after
+        // the insertion point.
+        for (index, info) in AGENT_REGISTRY.iter().enumerate() {
+            assert_eq!(
+                info.agent as usize, index,
+                "AGENT_REGISTRY entry {} ({}) is out of enum order",
+                index, info.label
+            );
+        }
+        assert_eq!(Agent::ALL.len(), AGENT_REGISTRY.len());
+        for agent in Agent::ALL {
+            assert_eq!(agent.info().agent, agent);
+            assert!(!agent.info().label.is_empty());
+            assert!(!agent.info().executable.is_empty());
+        }
+    }
+
+    #[test]
+    fn screen_manifest_agents_match_bundled_manifests() {
+        for agent in Agent::SCREEN_MANIFEST_AGENTS {
+            assert!(agent.info().has_screen_manifest);
+        }
+        for agent in Agent::ALL {
+            assert_eq!(
+                Agent::SCREEN_MANIFEST_AGENTS.contains(&agent),
+                agent.info().has_screen_manifest,
+                "manifest flag mismatch for {}",
+                agent.info().label
+            );
+        }
+    }
 
     #[test]
     fn identify_known_agents() {

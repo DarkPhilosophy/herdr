@@ -1,8 +1,9 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
 
-use crate::detect::Agent;
+use crate::detect::{agent_label, Agent};
 
 use super::io::resolve_config_relative_path;
 
@@ -22,30 +23,58 @@ pub struct SoundConfig {
     pub agents: AgentSoundOverrides,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(default)]
+/// Per-agent sound overrides keyed by canonical agent label.
+///
+/// Keys are dynamic: any known agent label (`claude`, `kimi`, `jcode`, …)
+/// works without code changes, and new agents become configurable as soon as
+/// they are registered. A few historical TOML field names that predate the
+/// canonical labels (`agy`, `open_code`, `github_copilot`) remain accepted as
+/// aliases so existing configs keep working.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct AgentSoundOverrides {
-    pub pi: AgentSoundSetting,
-    pub claude: AgentSoundSetting,
-    pub codex: AgentSoundSetting,
-    pub gemini: AgentSoundSetting,
-    pub cursor: AgentSoundSetting,
-    pub devin: AgentSoundSetting,
-    pub agy: AgentSoundSetting,
-    pub cline: AgentSoundSetting,
-    pub open_code: AgentSoundSetting,
-    pub github_copilot: AgentSoundSetting,
-    pub kimi: AgentSoundSetting,
-    pub kiro: AgentSoundSetting,
-    pub droid: AgentSoundSetting,
-    pub amp: AgentSoundSetting,
-    pub grok: AgentSoundSetting,
-    pub hermes: AgentSoundSetting,
-    pub kilo: AgentSoundSetting,
-    pub qodercli: AgentSoundSetting,
-    pub qwen: AgentSoundSetting,
-    pub maki: AgentSoundSetting,
-    pub jcode: AgentSoundSetting,
+    overrides: BTreeMap<&'static str, AgentSoundSetting>,
+}
+
+impl<'de> Deserialize<'de> for AgentSoundOverrides {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        // Legacy TOML field names that differ from the canonical label.
+        const LEGACY_KEYS: &[(&str, &str)] = &[
+            ("agy", "agy"),
+            ("open_code", "opencode"),
+            ("github_copilot", "copilot"),
+        ];
+
+        let raw = BTreeMap::<String, AgentSoundSetting>::deserialize(deserializer)?;
+        let mut overrides = BTreeMap::new();
+        for (key, setting) in raw {
+            let canonical = LEGACY_KEYS
+                .iter()
+                .find(|(legacy, _)| *legacy == key)
+                .map(|(_, canonical)| *canonical)
+                .unwrap_or(key.as_str());
+            let label = Agent::ALL
+                .iter()
+                .map(|agent| agent_label(*agent))
+                .find(|label| *label == canonical)
+                .ok_or_else(|| {
+                    D::Error::custom(format!(
+                        "unknown agent in [ui.sound.agents]: {key:?}; expected one of: {}",
+                        Agent::ALL
+                            .iter()
+                            .map(|agent| agent_label(*agent))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))
+                })?;
+            overrides.insert(label, setting);
+        }
+        Ok(Self { overrides })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
@@ -120,32 +149,21 @@ impl SoundConfig {
 
 impl AgentSoundOverrides {
     pub fn for_agent(&self, agent: Option<Agent>) -> AgentSoundSetting {
-        match agent {
-            Some(Agent::Pi) => self.pi,
-            Some(Agent::Claude) => self.claude,
-            Some(Agent::Codex) => self.codex,
-            Some(Agent::Gemini) => self.gemini,
-            Some(Agent::Cursor) => self.cursor,
-            Some(Agent::Devin) => self.devin,
-            Some(Agent::Antigravity) => self.agy,
-            Some(Agent::Cline) => self.cline,
-            Some(Agent::Omp) => AgentSoundSetting::Default,
-            Some(Agent::Mastracode) => AgentSoundSetting::Default,
-            Some(Agent::OpenCode) => self.open_code,
-            Some(Agent::GithubCopilot) => self.github_copilot,
-            Some(Agent::Kimi) => self.kimi,
-            Some(Agent::Kiro) => self.kiro,
-            Some(Agent::Droid) => self.droid,
-            Some(Agent::Amp) => self.amp,
-            Some(Agent::Grok) => self.grok,
-            Some(Agent::Hermes) => self.hermes,
-            Some(Agent::Kilo) => self.kilo,
-            Some(Agent::Qodercli) => self.qodercli,
-            Some(Agent::Qwen) => self.qwen,
-            Some(Agent::Maki) => self.maki,
-            Some(Agent::Jcode) => self.jcode,
-            None => AgentSoundSetting::Default,
-        }
+        let Some(agent) = agent else {
+            return AgentSoundSetting::Default;
+        };
+        self.overrides
+            .get(agent_label(agent))
+            .copied()
+            .unwrap_or_else(|| default_sound_for(agent))
+    }
+}
+
+/// Built-in sound defaults that differ from the global default.
+fn default_sound_for(agent: Agent) -> AgentSoundSetting {
+    match agent {
+        Agent::Droid => AgentSoundSetting::Off,
+        _ => AgentSoundSetting::Default,
     }
 }
 
@@ -161,33 +179,6 @@ impl Default for SoundConfig {
     }
 }
 
-impl Default for AgentSoundOverrides {
-    fn default() -> Self {
-        Self {
-            pi: AgentSoundSetting::Default,
-            claude: AgentSoundSetting::Default,
-            codex: AgentSoundSetting::Default,
-            gemini: AgentSoundSetting::Default,
-            cursor: AgentSoundSetting::Default,
-            devin: AgentSoundSetting::Default,
-            agy: AgentSoundSetting::Default,
-            cline: AgentSoundSetting::Default,
-            open_code: AgentSoundSetting::Default,
-            github_copilot: AgentSoundSetting::Default,
-            kimi: AgentSoundSetting::Default,
-            kiro: AgentSoundSetting::Default,
-            droid: AgentSoundSetting::Off,
-            amp: AgentSoundSetting::Default,
-            grok: AgentSoundSetting::Default,
-            hermes: AgentSoundSetting::Default,
-            kilo: AgentSoundSetting::Default,
-            qodercli: AgentSoundSetting::Default,
-            qwen: AgentSoundSetting::Default,
-            maki: AgentSoundSetting::Default,
-            jcode: AgentSoundSetting::Default,
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -220,9 +211,64 @@ claude = "on"
             config.ui.sound.request_path,
             Some(PathBuf::from("/tmp/request.mp3"))
         );
-        assert_eq!(config.ui.sound.agents.droid, AgentSoundSetting::Off);
-        assert_eq!(config.ui.sound.agents.claude, AgentSoundSetting::On);
-        assert_eq!(config.ui.sound.agents.pi, AgentSoundSetting::Default);
+        assert_eq!(
+            config.ui.sound.agents.for_agent(Some(Agent::Droid)),
+            AgentSoundSetting::Off
+        );
+        assert_eq!(
+            config.ui.sound.agents.for_agent(Some(Agent::Claude)),
+            AgentSoundSetting::On
+        );
+        assert_eq!(
+            config.ui.sound.agents.for_agent(Some(Agent::Pi)),
+            AgentSoundSetting::Default
+        );
+    }
+
+    #[test]
+    fn sound_agents_accept_legacy_field_names() {
+        let config: Config = toml::from_str(
+            r#"
+[ui.sound.agents]
+agy = "off"
+open_code = "on"
+github_copilot = "off"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.ui.sound.agents.for_agent(Some(Agent::Antigravity)),
+            AgentSoundSetting::Off
+        );
+        assert_eq!(
+            config.ui.sound.agents.for_agent(Some(Agent::OpenCode)),
+            AgentSoundSetting::On
+        );
+        assert_eq!(
+            config.ui.sound.agents.for_agent(Some(Agent::GithubCopilot)),
+            AgentSoundSetting::Off
+        );
+    }
+
+    #[test]
+    fn sound_agents_reject_unknown_agents() {
+        let result = toml::from_str::<Config>(
+            r#"
+[ui.sound.agents]
+notanagent = "on"
+"#,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn droid_defaults_to_muted_without_override() {
+        let config = SoundConfig::default();
+        assert_eq!(
+            config.agents.for_agent(Some(Agent::Droid)),
+            AgentSoundSetting::Off
+        );
     }
 
     #[test]

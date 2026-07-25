@@ -292,8 +292,8 @@ fn manifest_cache() -> &'static RwLock<ManifestCache> {
 fn build_manifest_cache() -> ManifestCache {
     ManifestCache {
         manifests: Agent::SCREEN_MANIFEST_AGENTS
-            .into_iter()
-            .map(|agent| (agent, load_manifest_uncached(agent)))
+            .iter()
+            .map(|agent| (*agent, load_manifest_uncached(*agent)))
             .collect(),
     }
 }
