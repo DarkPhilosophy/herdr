@@ -635,10 +635,15 @@ fn render_bar(
     for offset in 0..bar_width {
         let cell = &mut buffer[(bar_x + offset, area.y)];
         if solid {
-            // Solid mode: the filled region is a solid background strip (no
-            // glyph), matching omp-style usage bars. Empty region keeps the
-            // terminal default background.
+            // Solid usage-bar mode (omp /usage semantics):
+            // - the USED region is bare background (no glyph)
+            // - the FREE region is a dithered ░ strip in the status color
+            // - inner text ("n% free") starts at the used/free boundary
+            //   with a solid status-colored background under itself only
             if offset < filled {
+                cell.set_symbol(" ");
+                cell.set_style(Style::default());
+            } else {
                 let color = fill.map_or_else(
                     || {
                         let position = if bar_width <= 1 {
@@ -650,11 +655,8 @@ fn render_bar(
                     },
                     |fill| section_color(Some(fill), palette),
                 );
-                cell.set_symbol(" ");
-                cell.set_style(Style::default().bg(color));
-            } else {
-                cell.set_symbol(" ");
-                cell.set_style(Style::default());
+                cell.set_symbol("░");
+                cell.set_style(Style::default().fg(color));
             }
         } else if offset < filled {
             let color = fill.map_or_else(
@@ -724,6 +726,27 @@ fn render_bar(
                     None => palette.text,
                 };
                 style = style.fg(fg);
+                if solid {
+                    // Solid usage bars: when the text sits in the free
+                    // region (there is free space after the used strip),
+                    // the status color passes through the label itself —
+                    // solid status background, dark foreground. When the
+                    // free region is empty (0% free), the text keeps the
+                    // bare background and just takes the status color.
+                    if filled < bar_width {
+                        let bg = fill.map_or_else(
+                            || palette.accent,
+                            |fill| section_color(Some(fill), palette),
+                        );
+                        style = style.bg(bg).fg(palette.surface0);
+                    } else {
+                        let fg_color = fill.map_or_else(
+                            || palette.accent,
+                            |fill| section_color(Some(fill), palette),
+                        );
+                        style = style.fg(fg_color);
+                    }
+                }
                 if span.bold {
                     style = style.add_modifier(Modifier::BOLD);
                 }
