@@ -90,8 +90,8 @@ pub(crate) use self::{
         RemoteManageRowView, RemoteStateGlyph, SessionPickerRowView, WorktreePickerRowView,
     },
     settings::{
-        settings_button_rects, settings_popup_height, settings_show_primary_action,
-        SETTINGS_POPUP_WIDTH,
+        settings_button_rects, settings_popup_height, settings_popup_width,
+        settings_show_primary_action,
     },
     sidebar::{
         agent_entry_gap, agent_entry_height_in_body, agent_panel_body_rect, agent_panel_entries,

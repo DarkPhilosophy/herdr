@@ -927,10 +927,11 @@ pub(crate) fn open_settings_at(state: &mut AppState, section: SettingsSection) {
 
 impl AppState {
     fn settings_popup_rect(&self) -> Rect {
+        let screen = self.screen_rect();
         crate::ui::centered_popup_rect(
-            self.screen_rect(),
-            crate::ui::SETTINGS_POPUP_WIDTH,
-            crate::ui::settings_popup_height(self),
+            screen,
+            crate::ui::settings_popup_width(screen),
+            crate::ui::settings_popup_height(self, screen),
         )
         .unwrap_or_default()
     }

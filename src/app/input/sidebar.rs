@@ -243,9 +243,16 @@ impl AppState {
             && col < toggle.x + toggle.width
             && row >= toggle.y
             && row < toggle.y + toggle.height;
+        // The divider hit area covers the boundary column plus one column
+        // of slack INSIDE the sidebar: a single exact column is nearly
+        // unhittable with a mouse. The slack never extends over pane
+        // content (right side), where it would steal mouse-down events
+        // from text selection.
+        let divider_col = sidebar.x + sidebar.width.saturating_sub(1);
         sidebar.width > 0
             && !on_toggle
-            && col == sidebar.x + sidebar.width.saturating_sub(1)
+            && col + 1 >= divider_col
+            && col <= divider_col
             && row >= sidebar.y
             && row < sidebar.y + sidebar.height
     }

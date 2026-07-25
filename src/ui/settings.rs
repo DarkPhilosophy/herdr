@@ -24,25 +24,44 @@ use crate::{
 pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 96;
 pub(crate) const SETTINGS_POPUP_BASE_HEIGHT: u16 = 32;
 
-pub(crate) fn settings_popup_height(app: &AppState) -> u16 {
-    if app.settings.section == SettingsSection::Plugins {
-        let list_rows = app.installed_plugins.len().max(1) as u16;
-        return (14 + list_rows).max(SETTINGS_POPUP_BASE_HEIGHT);
-    }
-    if app.settings.section != SettingsSection::Integrations {
-        return SETTINGS_POPUP_BASE_HEIGHT;
-    }
-    let list_rows = app.integration_recommendations.len().max(1) as u16;
-    let footer_rows = integrations_footer_height(app, SETTINGS_POPUP_WIDTH - 2);
-    // borders 2 + header 3 + stack gaps 2 + modal footer 2
-    // + section title 1 + description 2 + spacers 2
-    (14 + list_rows + footer_rows).max(SETTINGS_POPUP_BASE_HEIGHT)
+/// Responsive settings popup geometry: the fixed width is the *cap*, not
+/// the target. Small screens shrink the popup proportionally instead of
+/// clipping it; large screens keep the designed size.
+pub(crate) fn settings_popup_width(area: Rect) -> u16 {
+    // Cap at the designed width, but never exceed ~90% of the screen.
+    SETTINGS_POPUP_WIDTH.min(area.width.saturating_sub(4).max(20))
+}
+
+pub(crate) fn settings_popup_height(app: &AppState, screen: Rect) -> u16 {
+    use crate::app::state::SettingsSection;
+
+    let content_rows = match app.settings.section {
+        SettingsSection::Plugins => app.installed_plugins.len().max(1) as u16,
+        SettingsSection::Integrations => {
+            let list_rows = app.integration_recommendations.len().max(1) as u16;
+            let footer_rows =
+                integrations_footer_height(app, settings_popup_width(screen).saturating_sub(2));
+            return (14 + list_rows + footer_rows)
+                .max(SETTINGS_POPUP_BASE_HEIGHT)
+                .min(screen.height.saturating_sub(2).max(6));
+        }
+        _ => 0,
+    };
+    let designed = if content_rows > 0 {
+        (14 + content_rows).max(SETTINGS_POPUP_BASE_HEIGHT)
+    } else {
+        SETTINGS_POPUP_BASE_HEIGHT
+    };
+    designed.min(screen.height.saturating_sub(2).max(6))
 }
 
 pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: Rect) {
     let p = &app.palette;
-    let Some(popup) = centered_popup_rect(area, SETTINGS_POPUP_WIDTH, settings_popup_height(app))
-    else {
+    let Some(popup) = centered_popup_rect(
+        area,
+        settings_popup_width(area),
+        settings_popup_height(app, area),
+    ) else {
         return;
     };
 
@@ -447,8 +466,14 @@ fn render_settings_plugins(app: &AppState, frame: &mut Frame, area: Rect) {
     // Order must match sorted_plugin_ids in app/input/settings.rs.
     plugins.sort_by_key(|a| a.name.to_lowercase());
 
+    // Scroll: keep the selected row visible when the list is taller than
+    // the content area.
+    let visible_rows = rows[3].height as usize;
+    let scroll =
+        scroll_offset_for_selection(app.settings.list.selected, visible_rows, plugins.len());
+
     let mut lines = Vec::new();
-    for (index, plugin) in plugins.iter().enumerate() {
+    for (index, plugin) in plugins.iter().enumerate().skip(scroll).take(visible_rows) {
         let selected = index == app.settings.list.selected;
         let (marker, marker_style) = if plugin.enabled {
             ("✓", Style::default().fg(p.green))
@@ -484,7 +509,7 @@ fn render_settings_plugins(app: &AppState, frame: &mut Frame, area: Rect) {
         });
     }
 
-    if lines.is_empty() {
+    if lines.is_empty() && plugins.is_empty() {
         lines.push(Line::from(Span::styled(
             " no plugins installed",
             Style::default().fg(p.overlay1),
@@ -492,6 +517,23 @@ fn render_settings_plugins(app: &AppState, frame: &mut Frame, area: Rect) {
     }
 
     frame.render_widget(Paragraph::new(lines), rows[3]);
+}
+
+/// Smallest scroll offset that keeps `selected` inside a viewport of
+/// `visible_rows` over a list of `total` items.
+pub(crate) fn scroll_offset_for_selection(
+    selected: usize,
+    visible_rows: usize,
+    total: usize,
+) -> usize {
+    if visible_rows == 0 || total <= visible_rows {
+        return 0;
+    }
+    if selected >= visible_rows {
+        (selected - visible_rows + 1).min(total - visible_rows)
+    } else {
+        0
+    }
 }
 
 fn render_settings_theme(app: &AppState, frame: &mut Frame, area: Rect) {
