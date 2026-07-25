@@ -635,15 +635,13 @@ fn render_bar(
     for offset in 0..bar_width {
         let cell = &mut buffer[(bar_x + offset, area.y)];
         if solid {
-            // Solid usage-bar mode (omp /usage semantics):
-            // - the USED region is bare background (no glyph)
-            // - the FREE region is a dithered ░ strip in the status color
-            // - inner text ("n% free") starts at the used/free boundary
-            //   with a solid status-colored background under itself only
-            if offset < filled {
-                cell.set_symbol(" ");
-                cell.set_style(Style::default());
-            } else {
+            // Direct port of omp's renderUsageBar (command-controller.ts):
+            // `fraction` is USED. The bar draws the FREE fraction as a
+            // gradient-colored █ strip from the left; the '<pct>% free'
+            // label straddles the strip edge (inverse video over the strip,
+            // gradient fg past it); the remainder is dim ░.
+            let free_width = bar_width - filled;
+            if offset < free_width {
                 let color = fill.map_or_else(
                     || {
                         let position = if bar_width <= 1 {
@@ -655,8 +653,15 @@ fn render_bar(
                     },
                     |fill| section_color(Some(fill), palette),
                 );
-                cell.set_symbol("░");
+                cell.set_symbol("█");
                 cell.set_style(Style::default().fg(color));
+            } else {
+                cell.set_symbol("░");
+                cell.set_style(
+                    Style::default()
+                        .fg(palette.surface_dim)
+                        .add_modifier(Modifier::DIM),
+                );
             }
         } else if offset < filled {
             let color = fill.map_or_else(
@@ -686,11 +691,12 @@ fn render_bar(
         }
     }
 
-    // Text rendered on top of the bar cells: each visible character replaces
-    // the cell glyph at its column. Filled cells keep their fill color as
-    // background context; spans carry their own foreground (defaulting to the
-    // theme text color) so the text stays readable over both fill and empty
-    // regions.
+    // Text rendered on top of the bar cells. In solid mode this mirrors
+    // omp's renderUsageBar label handling: the label starts at
+    // clamp(freeCells - labelWidth, 0, barWidth - labelWidth); the part over
+    // the free strip renders inverse (status bg, dark fg), the part past
+    // the strip renders with the status foreground. Other modes keep the
+    // simple overlay: span text replaces cell glyphs with span styling.
     if let Some(inner_spans) = inner_spans {
         let inner_width: u16 = inner_spans
             .iter()
@@ -698,11 +704,16 @@ fn render_bar(
             .sum();
         let mut column = match inner_align {
             Some(SectionBarInnerAlign::Right) => bar_width.saturating_sub(inner_width),
-            // At the boundary: text starts where the filled region ends
-            // (solid usage bars: the '<pct>% free' label leads the empty
-            // region right after the colored used strip).
             Some(SectionBarInnerAlign::Boundary) => {
-                if filled + inner_width > bar_width {
+                if solid {
+                    // omp: labelStart = clamp(freeCells - labelWidth,
+                    // 0, barWidth - labelWidth). `filled` holds used cells,
+                    // so free cells = bar_width - filled.
+                    let free_cells = bar_width.saturating_sub(filled);
+                    free_cells
+                        .saturating_sub(inner_width)
+                        .min(bar_width.saturating_sub(inner_width))
+                } else if filled + inner_width > bar_width {
                     bar_width.saturating_sub(inner_width)
                 } else {
                     filled
@@ -717,9 +728,6 @@ fn render_bar(
                 }
                 let cell = &mut buffer[(bar_x + column, area.y)];
                 let mut style = cell.style();
-                // In solid mode the cell already carries the fill as
-                // background; span foreground must contrast with it, so the
-                // default shifts to a dark surface color.
                 let fg = match span.color.as_deref() {
                     Some(color) => section_color(Some(color), palette),
                     None if solid => palette.surface0,
@@ -727,24 +735,15 @@ fn render_bar(
                 };
                 style = style.fg(fg);
                 if solid {
-                    // Solid usage bars: when the text sits in the free
-                    // region (there is free space after the used strip),
-                    // the status color passes through the label itself —
-                    // solid status background, dark foreground. When the
-                    // free region is empty (0% free), the text keeps the
-                    // bare background and just takes the status color.
-                    if filled < bar_width {
-                        let bg = fill.map_or_else(
-                            || palette.accent,
-                            |fill| section_color(Some(fill), palette),
-                        );
-                        style = style.bg(bg).fg(palette.surface0);
+                    let on_strip = column < bar_width.saturating_sub(filled);
+                    let status =
+                        fill.map_or_else(|| palette.accent, |f| section_color(Some(f), palette));
+                    if on_strip {
+                        // inverse: dark text on the status-colored strip
+                        style = style.bg(status).fg(palette.surface0);
                     } else {
-                        let fg_color = fill.map_or_else(
-                            || palette.accent,
-                            |fill| section_color(Some(fill), palette),
-                        );
-                        style = style.fg(fg_color);
+                        // past the strip: status-colored foreground, no bg
+                        style = style.fg(status);
                     }
                 }
                 if span.bold {
