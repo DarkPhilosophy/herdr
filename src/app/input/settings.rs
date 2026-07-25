@@ -39,6 +39,7 @@ pub(super) enum SettingsAction {
     },
     InstallRecommendedIntegrations,
     TogglePlugin(String),
+    ToggleIntegration(crate::api::schema::IntegrationTarget),
 }
 
 /// Sorted plugin ids matching the rendered Plugins list order.
@@ -117,6 +118,7 @@ impl App {
                     self.install_recommended_integrations()
                 }
                 SettingsAction::TogglePlugin(plugin_id) => self.toggle_plugin(&plugin_id),
+                SettingsAction::ToggleIntegration(target) => self.toggle_integration(target),
             }
         }
         if previous_section != SettingsSection::Integrations
@@ -874,8 +876,18 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
             }
         },
         SettingsSection::Integrations => match key.code {
-            KeyCode::Enter | KeyCode::Char(' ') if integrations_need_install(state) => {
-                return Some(SettingsAction::InstallRecommendedIntegrations);
+            KeyCode::Up | KeyCode::Char('k') => state.settings.list.move_prev(),
+            KeyCode::Down | KeyCode::Char('j') => state
+                .settings
+                .list
+                .move_next(state.integration_recommendations.len().max(1)),
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if let Some(rec) = state
+                    .integration_recommendations
+                    .get(state.settings.list.selected)
+                {
+                    return Some(SettingsAction::ToggleIntegration(rec.target));
+                }
             }
             KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
                 state.settings.section = SettingsSection::Sidebar;
@@ -1015,6 +1027,13 @@ impl AppState {
                     None
                 }
             }
+            SettingsSection::Integrations => {
+                // Must mirror render_settings_integrations layout:
+                // [1 title, 2 description, 1 spacer, Min(list), 1 spacer, footer]
+                let list_y = area.y + 4;
+                let idx = row.saturating_sub(list_y) as usize;
+                (row >= list_y && idx < self.integration_recommendations.len()).then_some(idx)
+            }
             SettingsSection::Plugins => {
                 let list_y = area.y + 3;
                 let idx = (row.saturating_sub(list_y)) as usize;
@@ -1035,7 +1054,6 @@ impl AppState {
                     None
                 }
             }
-            SettingsSection::Integrations => None,
         }
     }
 
@@ -1095,7 +1113,10 @@ impl AppState {
                             toggle_sidebar_config_item(self)
                         }
                         SettingsSection::Experiments => experiment_toggle_action(self, idx),
-                        SettingsSection::Integrations => None,
+                        SettingsSection::Integrations => self
+                            .integration_recommendations
+                            .get(idx)
+                            .map(|rec| SettingsAction::ToggleIntegration(rec.target)),
                     };
                 }
 
@@ -1114,7 +1135,15 @@ impl AppState {
                         None
                     }
                     _ => {
-                        cancel_settings(self);
+                        // Clicks inside the popup that hit no interactive
+                        // element (description, spacers, titles) are a
+                        // no-op; clicks OUTSIDE the popup dismiss it.
+                        if !self
+                            .settings_popup_rect()
+                            .contains(ratatui::layout::Position::new(mouse.column, mouse.row))
+                        {
+                            cancel_settings(self);
+                        }
                         None
                     }
                 }
@@ -1768,7 +1797,28 @@ mod tests {
     }
 
     #[test]
-    fn integrations_enter_does_nothing_when_nothing_needs_install() {
+    fn integrations_enter_toggles_selected_integration() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.integration_recommendations = vec![integration_recommendation(
+            crate::integration::IntegrationStatusKind::NotInstalled,
+            true,
+        )];
+        open_settings_at(&mut state, SettingsSection::Integrations);
+
+        let action = update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        );
+        assert_eq!(
+            action,
+            Some(SettingsAction::ToggleIntegration(
+                crate::api::schema::IntegrationTarget::Claude
+            ))
+        );
+    }
+
+    #[test]
+    fn integrations_enter_does_nothing_with_empty_list() {
         let mut state = state_with_workspaces(&["test"]);
         open_settings_at(&mut state, SettingsSection::Integrations);
 
@@ -1777,12 +1827,6 @@ mod tests {
             KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
         );
         assert_eq!(enter_action, None);
-
-        let space_action = update_settings_state(
-            &mut state,
-            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty()),
-        );
-        assert_eq!(space_action, None);
     }
 
     #[test]

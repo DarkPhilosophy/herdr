@@ -141,6 +141,9 @@ pub struct App {
     pub(crate) update_manifest_check_enabled: bool,
     pub(crate) loaded_host_cursor: crate::config::HostCursorModeConfig,
     pub(crate) agent_metadata_deadline: Option<Instant>,
+    /// 1s heartbeat that re-renders the sidebar while any pane is in a live
+    /// state (working/blocked) so the native elapsed-time display ticks.
+    pub(crate) elapsed_display_deadline: Option<Instant>,
     pub(crate) pending_agent_resume_deadline: Option<Instant>,
     pub(crate) selection_autoscroll_deadline: Option<Instant>,
     pub(crate) selection_highlight_clear_deadline: Option<Instant>,
@@ -264,13 +267,27 @@ fn agent_panel_sort_from_config(
     }
 }
 
-/// herdr-mx: map the persisted agent-panel scope config to runtime scope.
+/// Map the persisted agent-panel scope config to runtime scope.
 fn agent_panel_scope_from_config(
     scope: crate::config::AgentPanelScopeConfig,
 ) -> state::AgentPanelScope {
     match scope {
         crate::config::AgentPanelScopeConfig::Current => state::AgentPanelScope::CurrentWorkspace,
         crate::config::AgentPanelScopeConfig::All => state::AgentPanelScope::AllWorkspaces,
+    }
+}
+
+/// Select the API method for an integration settings-row toggle.
+fn integration_toggle_method(
+    target: crate::api::schema::IntegrationTarget,
+    state: crate::integration::IntegrationStatusKind,
+) -> crate::api::schema::Method {
+    use crate::api::schema;
+    match state {
+        crate::integration::IntegrationStatusKind::Current => {
+            schema::Method::IntegrationUninstall(schema::IntegrationUninstallParams { target })
+        }
+        _ => schema::Method::IntegrationInstall(schema::IntegrationInstallParams { target }),
     }
 }
 
@@ -837,6 +854,7 @@ impl App {
             update_manifest_check_enabled: config.update.manifest_check,
             loaded_host_cursor: config.ui.host_cursor,
             agent_metadata_deadline: None,
+            elapsed_display_deadline: None,
             pending_agent_resume_deadline: None,
             session_save_deadline: None,
             session_save_thread: None,
@@ -1430,6 +1448,24 @@ impl App {
             id: format!("settings:toggle-plugin:{plugin_id}"),
             method,
         });
+    }
+
+    /// Install or uninstall one integration target through the same
+    /// internal API path the socket handlers use.
+    pub(crate) fn toggle_integration(&mut self, target: crate::api::schema::IntegrationTarget) {
+        let state = self
+            .state
+            .integration_recommendations
+            .iter()
+            .find(|rec| rec.target == target)
+            .map(|rec| rec.state)
+            .unwrap_or(crate::integration::IntegrationStatusKind::NotInstalled);
+        let method = integration_toggle_method(target, state);
+        let _ = self.handle_api_request(crate::api::schema::Request {
+            id: format!("settings:toggle-integration:{target:?}"),
+            method,
+        });
+        self.refresh_integration_recommendations();
     }
 
     pub(crate) fn install_recommended_integrations(&mut self) {
@@ -2231,6 +2267,25 @@ mod tests {
             .unwrap()
             .as_nanos();
         std::env::temp_dir().join(format!("herdr-{name}-{}-{stamp}", std::process::id()))
+    }
+
+    #[test]
+    fn toggle_integration_outdated_means_update_not_uninstall() {
+        use crate::api::schema;
+        use crate::integration::IntegrationStatusKind;
+
+        for (state, expect_uninstall) in [
+            (IntegrationStatusKind::Current, true),
+            (IntegrationStatusKind::Outdated, false),
+            (IntegrationStatusKind::NotInstalled, false),
+        ] {
+            let method = integration_toggle_method(schema::IntegrationTarget::Claude, state);
+            let is_uninstall = matches!(method, schema::Method::IntegrationUninstall(_));
+            assert_eq!(
+                is_uninstall, expect_uninstall,
+                "{state:?} must route to the right method"
+            );
+        }
     }
 
     #[cfg(windows)]

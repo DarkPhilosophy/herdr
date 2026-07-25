@@ -1291,23 +1291,19 @@ fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<Resol
 }
 
 /// Contextual elapsed formatting shared by the native state display:
-/// <60s -> "13s", <60m -> "2m", >=60m -> "1h 2m" (seconds never shown past
-/// the minute).
+/// <60s -> "13s", <60m -> "2m 34s" style minute+second, >=60m -> "1h 2m 3s".
 pub(crate) fn format_elapsed_short(total_secs: u64) -> String {
     if total_secs < 60 {
         return format!("{total_secs}s");
     }
     let minutes = total_secs / 60;
+    let seconds = total_secs % 60;
     if minutes < 60 {
-        return format!("{minutes}m");
+        return format!("{minutes}m {seconds}s");
     }
     let hours = minutes / 60;
     let minutes = minutes % 60;
-    if minutes > 0 {
-        format!("{hours}h {minutes}m")
-    } else {
-        format!("{hours}h")
-    }
+    format!("{hours}h {minutes}m {seconds}s")
 }
 
 /// State label for the agent panel, honoring `ui.agent_state_display`:
@@ -1933,7 +1929,7 @@ fn render_workspace_list(
     if area.height > 0 {
         frame.render_widget(
             Paragraph::new(Line::from(vec![Span::styled(
-                " spaces",
+                " Spaces",
                 Style::default().fg(p.overlay0).add_modifier(Modifier::BOLD),
             )])),
             Rect::new(area.x, area.y, area.width, 1),
@@ -2307,7 +2303,7 @@ fn render_workspace_list(
         };
         let new_rect = app.sidebar_new_button_rect();
         frame.render_widget(
-            Paragraph::new(Span::styled(" new", Style::default().fg(new_fg))),
+            Paragraph::new(Span::styled(" New", Style::default().fg(new_fg))),
             new_rect,
         );
 
@@ -2318,10 +2314,10 @@ fn render_workspace_list(
                     "● ",
                     Style::default().fg(p.accent).add_modifier(Modifier::BOLD),
                 ),
-                Span::styled("menu", Style::default().fg(menu_fg)),
+                Span::styled("Menu", Style::default().fg(menu_fg)),
             ])
         } else {
-            Line::from(vec![Span::styled("menu", Style::default().fg(menu_fg))])
+            Line::from(vec![Span::styled("Menu", Style::default().fg(menu_fg))])
         };
         frame.render_widget(
             Paragraph::new(menu_line).alignment(Alignment::Right),
@@ -3080,12 +3076,13 @@ mod tests {
         assert_eq!(format_elapsed_short(0), "0s");
         assert_eq!(format_elapsed_short(13), "13s");
         assert_eq!(format_elapsed_short(59), "59s");
-        assert_eq!(format_elapsed_short(60), "1m");
-        assert_eq!(format_elapsed_short(150), "2m");
-        assert_eq!(format_elapsed_short(3599), "59m");
-        assert_eq!(format_elapsed_short(3600), "1h");
-        assert_eq!(format_elapsed_short(3720), "1h 2m");
-        assert_eq!(format_elapsed_short(9000), "2h 30m");
+        assert_eq!(format_elapsed_short(60), "1m 0s");
+        assert_eq!(format_elapsed_short(150), "2m 30s");
+        assert_eq!(format_elapsed_short(3599), "59m 59s");
+        assert_eq!(format_elapsed_short(3600), "1h 0m 0s");
+        assert_eq!(format_elapsed_short(3720), "1h 2m 0s");
+        assert_eq!(format_elapsed_short(9000), "2h 30m 0s");
+        assert_eq!(format_elapsed_short(9007), "2h 30m 7s");
     }
 
     fn row_text(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> String {

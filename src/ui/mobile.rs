@@ -725,7 +725,7 @@ fn render_mobile_switcher_content(
         content,
         doc_y,
         app.mobile_switcher_scroll,
-        "menu",
+        "Menu",
         p,
     );
     doc_y += 1;

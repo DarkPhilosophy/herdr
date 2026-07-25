@@ -290,6 +290,18 @@ impl App {
 
         self.sync_animation_timer(now);
 
+        // Heartbeat for the native elapsed-time sidebar display: when the
+        // deadline armed by the previous pass expires, mark the frame dirty.
+        // Reprogram AFTER the check — syncing first would push the deadline
+        // to now+1s and make the branch dead code.
+        if self
+            .elapsed_display_deadline
+            .is_some_and(|deadline| now >= deadline)
+        {
+            changed = true;
+        }
+        self.sync_elapsed_display_deadline(now);
+
         if now >= self.next_resize_poll {
             resized = self.handle_resize_poll();
             changed |= resized;
@@ -481,6 +493,25 @@ impl App {
             .any(|ws| ws.has_working_pane(&self.state.terminals))
     }
 
+    /// Reprogram the 1s elapsed-display heartbeat while the native state
+    /// display shows ticking values (elapsed/both) AND at least one pane is
+    /// in a live state (working or blocked). Static states (idle/done with
+    /// their frozen duration) never need the heartbeat.
+    pub(crate) fn sync_elapsed_display_deadline(&mut self, now: Instant) {
+        use crate::config::AgentStateDisplayConfig;
+        use crate::detect::AgentState;
+
+        let display_live = matches!(
+            self.state.agent_state_display,
+            AgentStateDisplayConfig::Elapsed | AgentStateDisplayConfig::Both
+        );
+        let any_live = display_live
+            && self.state.terminals.values().any(|terminal| {
+                matches!(terminal.state, AgentState::Working | AgentState::Blocked)
+            });
+        self.elapsed_display_deadline = any_live.then_some(now + std::time::Duration::from_secs(1));
+    }
+
     pub(crate) fn tick_selection_autoscroll(&mut self, now: Instant) {
         let Some(autoscroll) = self.state.selection_autoscroll.clone() else {
             // Self-heal: state cleared but deadline leaked
@@ -656,6 +687,7 @@ impl App {
             self.next_auto_update_check,
             self.next_agent_manifest_update_check,
             self.agent_metadata_deadline,
+            self.elapsed_display_deadline,
             self.pending_agent_resume_deadline,
             self.session_save_deadline,
             self.selection_autoscroll_deadline,
@@ -748,6 +780,42 @@ mod tests {
             is_focused: true,
         });
         (app, pane_id)
+    }
+
+    #[test]
+    fn elapsed_display_heartbeat_marks_dirty_and_reprograms() {
+        use crate::config::AgentStateDisplayConfig;
+        use crate::detect::{Agent, AgentState};
+
+        let (mut app, _pane_id) = test_app_with_pane();
+        app.state.ensure_test_terminals();
+        app.state.agent_state_display = AgentStateDisplayConfig::Elapsed;
+        let terminal_id = app.state.terminals.keys().next().unwrap().clone();
+        app.state
+            .terminals
+            .get_mut(&terminal_id)
+            .unwrap()
+            .set_detected_state(Some(Agent::Pi), AgentState::Working);
+
+        let now = Instant::now();
+        // Arm the deadline in the past so this pass must fire.
+        app.elapsed_display_deadline = Some(now);
+
+        let changed = app.handle_scheduled_tasks(now, false);
+
+        assert!(changed, "expired heartbeat must mark the frame dirty");
+        let next = app
+            .elapsed_display_deadline
+            .expect("heartbeat must be reprogrammed while a pane is working");
+        assert!(next > now, "reprogrammed deadline must be in the future");
+    }
+
+    #[test]
+    fn elapsed_display_heartbeat_stays_off_for_text_display() {
+        let (mut app, _pane_id) = test_app_with_pane();
+        let now = Instant::now();
+        app.sync_elapsed_display_deadline(now);
+        assert!(app.elapsed_display_deadline.is_none());
     }
 
     #[test]
