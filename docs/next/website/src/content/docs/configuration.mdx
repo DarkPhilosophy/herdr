@@ -427,6 +427,27 @@ Metadata reporters provide values only; styling stays in the local sidebar confi
 
 Sidebar row settings affect only the expanded desktop sidebar. Collapsed and mobile views keep their compact layouts.
 
+### Custom sidebar sections
+
+`ui.sidebar.sections` is an open-ended array of tables: each entry declares one custom section that external tools fill through the API. Because entries are dynamic, they are documented here instead of the per-key config reference.
+
+```toml
+[[ui.sidebar.sections]]
+id = "deployments"
+title = "Deployments"
+highlight_token = "deploy_status"
+max_rows = 8
+placement = "below_agents"
+```
+
+- `id` (required) — stable identifier used by API publishers; must be unique. Invalid or duplicate ids are ignored with a startup diagnostic.
+- `title` — optional section header; when omitted the section renders without a title row.
+- `highlight_token` — optional pane metadata token; when the focused pane reports this token, matching section rows are highlighted.
+- `max_rows` — maximum rendered rows for the section (default 8).
+- `placement` — currently only `below_agents`.
+
+Sections render below the Agent panel and are populated via `herdr section` CLI commands or the sections API; see [CLI reference](/docs/cli-reference/) for publishing rows.
+
 ## Notifications
 
 Herdr can notify you when a background agent finishes or needs input:

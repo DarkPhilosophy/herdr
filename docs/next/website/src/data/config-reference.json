@@ -654,6 +654,12 @@
           ]
         },
         {
+          "key": "ui.sidebar_sections_height",
+          "type": "number",
+          "default": "8",
+          "description": "Default height of the expanded custom-sections region. Dragging its divider persists a session-specific override."
+        },
+        {
           "key": "ui.mobile_width_threshold",
           "type": "integer",
           "default": "64",
@@ -1145,6 +1151,17 @@
           "type": "enum",
           "default": "\"default\"",
           "description": "Sound override for detected Maki agents.",
+          "values": [
+            "default",
+            "on",
+            "off"
+          ]
+        },
+        {
+          "key": "ui.sound.agents.jcode",
+          "type": "enum",
+          "default": "\"default\"",
+          "description": "Sound override for detected Jcode agents.",
           "values": [
             "default",
             "on",
