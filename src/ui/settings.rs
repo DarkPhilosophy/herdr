@@ -103,13 +103,57 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
             Line::from(section.label())
         }
     });
-    let tabs = Tabs::new(tab_labels)
-        .select(
-            SettingsSection::ALL
+    let selected_tab = SettingsSection::ALL
+        .iter()
+        .position(|section| *section == app.settings.section)
+        .unwrap_or(0);
+    // On narrow popups the full tab row does not fit: show a window of tabs
+    // centered on the selection instead of silently truncating the ends.
+    let all_labels: Vec<Line> = tab_labels.collect();
+    let total_width: usize = all_labels
+        .iter()
+        .map(|line| {
+            line.spans
                 .iter()
-                .position(|section| *section == app.settings.section)
-                .unwrap_or(0),
-        )
+                .map(|span| span.content.chars().count())
+                .sum::<usize>()
+                + 3
+        })
+        .sum();
+    let available = header_rows[1].width as usize;
+    let (visible_labels, visible_selected) = if total_width <= available {
+        (all_labels, selected_tab)
+    } else {
+        // Greedily include tabs around the selection until we run out of
+        // space, expanding left first to keep context on both sides.
+        let mut lo = selected_tab;
+        let mut hi = selected_tab;
+        let label_width = |idx: usize| {
+            all_labels[idx]
+                .spans
+                .iter()
+                .map(|span| span.content.chars().count())
+                .sum::<usize>()
+                + 3
+        };
+        let mut used = label_width(selected_tab);
+        loop {
+            let grow_left = lo > 0 && used + label_width(lo - 1) <= available;
+            let grow_right = hi + 1 < all_labels.len() && used + label_width(hi + 1) <= available;
+            if grow_left {
+                lo -= 1;
+                used += label_width(lo);
+            } else if grow_right {
+                hi += 1;
+                used += label_width(hi);
+            } else {
+                break;
+            }
+        }
+        (all_labels[lo..=hi].to_vec(), selected_tab - lo)
+    };
+    let tabs = Tabs::new(visible_labels)
+        .select(visible_selected)
         .style(Style::default().fg(p.overlay1))
         .highlight_style(
             Style::default()
