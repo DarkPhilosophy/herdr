@@ -487,10 +487,9 @@ fn render_settings_plugins(app: &AppState, frame: &mut Frame, area: Rect) {
     let rows = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(2),
-        Constraint::Length(1),
         Constraint::Min(0),
     ])
-    .areas::<4>(area);
+    .areas::<3>(area);
 
     frame.render_widget(
         Paragraph::new("plugins").style(Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
@@ -512,7 +511,7 @@ fn render_settings_plugins(app: &AppState, frame: &mut Frame, area: Rect) {
 
     // Scroll: keep the selected row visible when the list is taller than
     // the content area.
-    let visible_rows = rows[3].height as usize;
+    let visible_rows = rows[2].height as usize;
     let scroll =
         scroll_offset_for_selection(app.settings.list.selected, visible_rows, plugins.len());
 
@@ -560,7 +559,7 @@ fn render_settings_plugins(app: &AppState, frame: &mut Frame, area: Rect) {
         )));
     }
 
-    frame.render_widget(Paragraph::new(lines), rows[3]);
+    frame.render_widget(Paragraph::new(lines), rows[2]);
 }
 
 /// Smallest scroll offset that keeps `selected` inside a viewport of
