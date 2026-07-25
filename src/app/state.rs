@@ -2180,6 +2180,9 @@ pub struct AppState {
     pub agent_panel_sort: AgentPanelSort,
     pub agent_panel_scope: AgentPanelScope,
     pub status_indicators: crate::config::StatusIndicatorStyle,
+    /// What the agent panel state text shows (status words, elapsed time,
+    /// or both). From `ui.agent_state_display`.
+    pub agent_state_display: crate::config::AgentStateDisplayConfig,
     /// Transient session-wide projection override for the built-in Agents view.
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
@@ -2618,6 +2621,7 @@ impl AppState {
             agent_panel_sort: AgentPanelSort::Spaces,
             agent_panel_scope: AgentPanelScope::AllWorkspaces,
             status_indicators: crate::config::StatusIndicatorStyle::Dots,
+            agent_state_display: crate::config::AgentStateDisplayConfig::default(),
             agent_view_override: None,
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),

@@ -34,6 +34,7 @@ pub(crate) struct AgentPanelEntry {
     pub agent_kind_label: Option<String>,
     pub state: AgentState,
     pub seen: bool,
+    pub state_entered_at: Option<std::time::Instant>,
     pub last_agent_state_change_seq: Option<u64>,
     pub custom_status: Option<String>,
     pub state_labels: HashMap<String, String>,
@@ -239,6 +240,7 @@ fn collect_agent_panel_entries_with_runtimes(
                         agent_kind_label: detail.agent_kind_label,
                         state: detail.state,
                         seen: detail.seen,
+                        state_entered_at: detail.state_entered_at,
                         last_agent_state_change_seq: detail.last_agent_state_change_seq,
                         custom_status: detail.tokens.get("status").cloned(),
                         state_labels: detail.state_labels,
@@ -1281,17 +1283,72 @@ pub(crate) fn agent_panel_body_rect(area: Rect, has_scrollbar: bool) -> Rect {
     Rect::new(area.x, body_y, body_width, body_height)
 }
 
-fn sidebar_agent_render_lines(app: &AppState) -> Vec<SidebarLine> {
-    let mut lines: Vec<_> = app
-        .sidebar_agent
-        .lines
-        .iter()
-        .enumerate()
-        .filter(|(_, line)| line.iter().any(|item| item.show))
-        .map(|(idx, _)| SidebarLine::from_index(idx))
-        .collect();
-    if lines.is_empty() {
-        lines.push(SidebarLine::First);
+fn resolved_agent_rows(app: &AppState, entry: &AgentPanelEntry) -> Vec<Vec<ResolvedToken>> {
+    let label = agent_state_display_label(app, entry);
+    tokens::agent_rows(&app.sidebar_agents, entry, &label)
+}
+
+/// Contextual elapsed formatting shared by the native state display:
+/// <60s -> "13s", <60m -> "2m", >=60m -> "1h 2m" (seconds never shown past
+/// the minute).
+pub(crate) fn format_elapsed_short(total_secs: u64) -> String {
+    if total_secs < 60 {
+        return format!("{total_secs}s");
+    }
+    let minutes = total_secs / 60;
+    if minutes < 60 {
+        return format!("{minutes}m");
+    }
+    let hours = minutes / 60;
+    let minutes = minutes % 60;
+    if minutes > 0 {
+        format!("{hours}h {minutes}m")
+    } else {
+        format!("{hours}h")
+    }
+}
+
+/// State label for the agent panel, honoring `ui.agent_state_display`:
+/// custom metadata labels still win, then the native elapsed/both formats,
+/// falling back to the plain status word.
+fn agent_state_display_label(app: &AppState, entry: &AgentPanelEntry) -> String {
+    let status_key = agent_panel_status_key(entry.state, entry.seen);
+    if let Some(custom) = entry.state_labels.get(status_key) {
+        return custom.clone();
+    }
+    let plain = state_label(entry.state, entry.seen);
+    let display = app.agent_state_display;
+    if matches!(display, crate::config::AgentStateDisplayConfig::Text) {
+        return plain.to_string();
+    }
+    let Some(entered) = entry.state_entered_at else {
+        return plain.to_string();
+    };
+    let elapsed = format_elapsed_short(entered.elapsed().as_secs());
+    match display {
+        crate::config::AgentStateDisplayConfig::Elapsed => elapsed,
+        crate::config::AgentStateDisplayConfig::Both => format!("{plain} {elapsed}"),
+        crate::config::AgentStateDisplayConfig::Text => unreachable!(),
+    }
+}
+
+pub(crate) fn agent_entry_height_in_body(
+    app: &AppState,
+    entry: &AgentPanelEntry,
+    body_height: u16,
+) -> u16 {
+    (resolved_agent_rows(app, entry)
+        .len()
+        .max(1)
+        .min(u16::MAX as usize) as u16)
+        .min(body_height)
+}
+
+pub(crate) fn agent_entry_gap(app: &AppState, entry_idx: usize, entry_count: usize) -> u16 {
+    if entry_idx + 1 < entry_count {
+        app.sidebar_agents.row_gap
+    } else {
+        0
     }
     lines
 }
@@ -2998,6 +3055,427 @@ mod tests {
     use crate::{detect::Agent, workspace::Workspace};
     use ratatui::{backend::TestBackend, Terminal};
 
+    #[test]
+    fn elapsed_short_format_is_contextual() {
+        assert_eq!(format_elapsed_short(0), "0s");
+        assert_eq!(format_elapsed_short(13), "13s");
+        assert_eq!(format_elapsed_short(59), "59s");
+        assert_eq!(format_elapsed_short(60), "1m");
+        assert_eq!(format_elapsed_short(150), "2m");
+        assert_eq!(format_elapsed_short(3599), "59m");
+        assert_eq!(format_elapsed_short(3600), "1h");
+        assert_eq!(format_elapsed_short(3720), "1h 2m");
+        assert_eq!(format_elapsed_short(9000), "2h 30m");
+    }
+
+    fn row_text(buffer: &ratatui::buffer::Buffer, row: u16, width: u16) -> String {
+        (0..width)
+            .map(|x| buffer[(x, row)].symbol())
+            .collect::<String>()
+            .trim_end()
+            .to_string()
+    }
+
+    fn find_symbol_x(buffer: &ratatui::buffer::Buffer, row: u16, width: u16, symbol: &str) -> u16 {
+        (0..width)
+            .find(|x| buffer[(*x, row)].symbol() == symbol)
+            .unwrap_or_else(|| {
+                panic!(
+                    "missing symbol {symbol:?} in row {}",
+                    row_text(buffer, row, width)
+                )
+            })
+    }
+
+    #[test]
+    fn default_agent_rows_remove_redundant_state_text() {
+        let mut app = crate::app::state::AppState::test_new();
+        let workspace = Workspace::test_new("one");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal_state = app.terminals.get_mut(&terminal_id).unwrap();
+        terminal_state.detected_agent = Some(Agent::Pi);
+        terminal_state.state = AgentState::Working;
+
+        let area = Rect::new(0, 0, 26, 20);
+        let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_body_rect(agent_area, false);
+
+        let first = row_text(buffer, body.y, 25);
+        let second = row_text(buffer, body.y + 1, 25);
+        assert!(first.contains("one"));
+        assert_eq!(second, "   pi");
+        assert!(!first.contains("working"));
+        assert!(!second.contains("working"));
+
+        let workspace_x = find_symbol_x(buffer, body.y, body.width, "o");
+        let workspace_style = buffer[(workspace_x, body.y)].style();
+        assert_eq!(workspace_style.fg, Some(app.palette.text));
+        assert!(workspace_style.add_modifier.contains(Modifier::BOLD));
+        assert!(!workspace_style.add_modifier.contains(Modifier::DIM));
+        assert_eq!(workspace_style.bg, Some(app.palette.surface_dim));
+
+        let agent_x = find_symbol_x(buffer, body.y + 1, body.width, "p");
+        let agent_style = buffer[(agent_x, body.y + 1)].style();
+        assert_eq!(agent_style.fg, Some(app.palette.overlay0));
+        assert!(agent_style.add_modifier.contains(Modifier::DIM));
+        assert!(!agent_style.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(agent_style.bg, Some(app.palette.surface_dim));
+    }
+
+    #[test]
+    fn occurrence_false_removes_default_workspace_bold_and_agent_dim() {
+        let config: crate::config::Config = toml::from_str(
+            r##"
+[ui.sidebar.agents]
+rows = [[{ token = "workspace", bold = false }, { token = "agent", dim = false }]]
+"##,
+        )
+        .unwrap();
+        let mut app = crate::app::state::AppState::test_new();
+        app.sidebar_agents = config.ui.sidebar.agents;
+        let workspace = Workspace::test_new("one");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        app.active = Some(0);
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Pi);
+
+        let area = Rect::new(0, 0, 26, 20);
+        let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_body_rect(agent_area, false);
+        let buffer = terminal.backend().buffer();
+        let workspace = buffer[(find_symbol_x(buffer, body.y, body.width, "o"), body.y)].style();
+        let agent = buffer[(find_symbol_x(buffer, body.y, body.width, "p"), body.y)].style();
+
+        assert_eq!(workspace.fg, Some(app.palette.text));
+        assert!(!workspace.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(agent.fg, Some(app.palette.overlay0));
+        assert!(!agent.add_modifier.contains(Modifier::DIM));
+    }
+
+    #[test]
+    fn default_space_workspace_style_tracks_active_state() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.active = Some(0);
+        app.mode = Mode::Terminal;
+        let area = Rect::new(0, 0, 26, 20);
+        app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
+        let first_row = app.view.workspace_card_areas[0].rect.y;
+        let second_row = app.view.workspace_card_areas[1].rect.y;
+        let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        let active = buffer[(find_symbol_x(buffer, first_row, 25, "o"), first_row)].style();
+        assert_eq!(active.fg, Some(app.palette.text));
+        assert!(active.add_modifier.contains(Modifier::BOLD));
+        assert!(!active.add_modifier.contains(Modifier::DIM));
+        assert_eq!(active.bg, Some(app.palette.surface_dim));
+
+        let inactive = buffer[(find_symbol_x(buffer, second_row, 25, "t"), second_row)].style();
+        assert_eq!(inactive.fg, Some(app.palette.subtext0));
+        assert!(!inactive
+            .add_modifier
+            .intersects(Modifier::BOLD | Modifier::DIM));
+        assert_eq!(inactive.bg, Some(ratatui::style::Color::Reset));
+    }
+
+    #[test]
+    fn space_occurrence_style_applies_without_styling_separator() {
+        let config: crate::config::Config = toml::from_str(
+            r##"
+[ui.sidebar.spaces]
+rows = [[{ token = "$hype", fg = "#abcdef", bold = true, dim = false }, "workspace"]]
+"##,
+        )
+        .unwrap();
+        let mut app = crate::app::state::AppState::test_new();
+        app.sidebar_spaces = config.ui.sidebar.spaces;
+        app.workspaces = vec![Workspace::test_new("one")];
+        app.active = Some(0);
+        app.mode = Mode::Terminal;
+        app.workspaces[0].metadata_tokens.patch(
+            std::collections::HashMap::from([("hype".into(), Some("HI".into()))]),
+            None,
+            std::time::Instant::now(),
+        );
+
+        let area = Rect::new(0, 0, 26, 20);
+        app.view.workspace_card_areas = compute_workspace_card_areas(&app, area);
+        let row = app.view.workspace_card_areas[0].rect.y;
+        let mut terminal = Terminal::new(TestBackend::new(26, 20)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let h = buffer[(find_symbol_x(buffer, row, 25, "H"), row)].style();
+        let i = buffer[(find_symbol_x(buffer, row, 25, "I"), row)].style();
+        let separator = buffer[(find_symbol_x(buffer, row, 25, "·"), row)].style();
+
+        for style in [h, i] {
+            assert_eq!(style.fg, Some(ratatui::style::Color::Rgb(0xab, 0xcd, 0xef)));
+            assert!(style.add_modifier.contains(Modifier::BOLD));
+            assert!(!style.add_modifier.contains(Modifier::DIM));
+            assert_eq!(style.bg, Some(app.palette.surface_dim));
+        }
+        assert_eq!(separator.fg, Some(app.palette.overlay0));
+        assert!(separator.add_modifier.contains(Modifier::DIM));
+        assert!(!separator.add_modifier.contains(Modifier::BOLD));
+        assert_eq!(separator.bg, Some(app.palette.surface_dim));
+    }
+
+    #[test]
+    fn occurrence_foreground_flattens_composite_git_status_colors() {
+        let config: crate::config::Config = toml::from_str(
+            r##"[ui.sidebar.spaces]
+rows = [[{ token = "git_status", fg = "#123456" }]]
+"##,
+        )
+        .unwrap();
+        let spans = resolved_token_spans(
+            &[ResolvedToken {
+                kind: ResolvedTokenKind::GitStatus {
+                    ahead: 2,
+                    behind: 1,
+                },
+                style: config.ui.sidebar.spaces.rows[0][0].parts().1,
+            }],
+            ("", Style::default()),
+            Style::default(),
+            Style::default(),
+            Style::default(),
+            Style::default(),
+            &crate::app::state::AppState::test_new().palette,
+            20,
+        );
+
+        assert_eq!(
+            spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>(),
+            "↑2 ↓1"
+        );
+        assert!(spans
+            .iter()
+            .all(|span| { span.style.fg == Some(ratatui::style::Color::Rgb(0x12, 0x34, 0x56)) }));
+    }
+
+    #[test]
+    fn default_agent_row_gap_packs_rendering_and_scroll_geometry() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.ensure_test_terminals();
+        for (workspace, agent) in app.workspaces.iter().zip([Agent::Pi, Agent::Claude]) {
+            let pane_id = workspace.tabs[0].root_pane;
+            let terminal_id = workspace.tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(agent);
+        }
+        app.sidebar_agents.rows = vec![vec![crate::config::AgentSidebarToken::Agent]];
+        assert_eq!(app.sidebar_agents.row_gap, 0);
+
+        let area = Rect::new(0, 0, 20, 5);
+        let metrics = agent_panel_scroll_metrics(&app, area);
+        let body = agent_panel_body_rect(area, false);
+        let mut terminal = Terminal::new(TestBackend::new(20, 5)).unwrap();
+        terminal
+            .draw(|frame| render_agent_detail(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+
+        assert_eq!(metrics.viewport_rows, 2);
+        assert_eq!(metrics.max_offset_from_bottom, 0);
+        assert_eq!(row_text(buffer, body.y, body.width), " pi");
+        assert_eq!(row_text(buffer, body.y + 1, body.width), " claude");
+    }
+
+    #[test]
+    fn narrow_agent_rows_preserve_later_tab_tokens() {
+        let mut app = crate::app::state::AppState::test_new();
+        let mut workspace = Workspace::test_new("very-long-workspace-name");
+        let tab_idx = workspace.test_add_tab(Some("logs"));
+        let pane_id = workspace.tabs[tab_idx].root_pane;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        let terminal_id = app.workspaces[0].tabs[tab_idx].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Pi);
+
+        let area = Rect::new(0, 0, 18, 20);
+        let mut terminal = Terminal::new(TestBackend::new(18, 20)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_body_rect(agent_area, false);
+        let first = row_text(buffer, body.y, 17);
+
+        assert!(first.contains("logs"), "rendered row: {first:?}");
+        assert!(first.contains('·'), "rendered row: {first:?}");
+    }
+
+    #[test]
+    fn stripped_terminal_title_renders_with_unicode_width_truncation() {
+        let mut app = crate::app::state::AppState::test_new();
+        let workspace = Workspace::test_new("one");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        let terminal = app.terminals.get_mut(&terminal_id).unwrap();
+        terminal.detected_agent = Some(Agent::Claude);
+        terminal.set_terminal_title(Some("⠋ 修复🙂标题很长".into()));
+        app.sidebar_agents.rows = vec![vec![
+            crate::config::AgentSidebarToken::TerminalTitleStripped,
+        ]];
+
+        let area = Rect::new(0, 0, 10, 12);
+        let mut renderer = Terminal::new(TestBackend::new(10, 12)).unwrap();
+        renderer
+            .draw(|frame| render_sidebar(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+        let (_, agent_area) = expanded_sidebar_sections(area, app.sidebar_section_split);
+        let body = agent_panel_body_rect(agent_area, false);
+        let rendered = row_text(renderer.backend().buffer(), body.y, 9);
+
+        assert!(!rendered.contains('⠋'));
+        assert!(rendered.contains('修') && rendered.contains('复'));
+
+        let spans = resolved_token_spans(
+            &[ResolvedToken::unstyled(ResolvedTokenKind::TerminalTitle(
+                "修复🙂标题很长".into(),
+            ))],
+            ("", Style::default()),
+            Style::default(),
+            Style::default(),
+            Style::default(),
+            Style::default(),
+            &app.palette,
+            8,
+        );
+        let text = spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(display_width(&text) <= 8, "resolved title: {text:?}");
+    }
+
+    #[test]
+    fn variable_agent_heights_pack_the_bottom_and_reveal_targets() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![
+            Workspace::test_new("one"),
+            Workspace::test_new("two"),
+            Workspace::test_new("three"),
+        ];
+        app.ensure_test_terminals();
+        for workspace in &app.workspaces {
+            let pane_id = workspace.tabs[0].root_pane;
+            let terminal_id = workspace.tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Pi);
+        }
+        let first_pane = app.workspaces[0].tabs[0].root_pane;
+        let first_terminal = app.workspaces[0].tabs[0].panes[&first_pane]
+            .attached_terminal_id
+            .clone();
+        app.terminals
+            .get_mut(&first_terminal)
+            .unwrap()
+            .metadata_tokens
+            .patch(
+                std::collections::HashMap::from([
+                    ("a".into(), Some("a".into())),
+                    ("b".into(), Some("b".into())),
+                ]),
+                None,
+                std::time::Instant::now(),
+            );
+        app.sidebar_agents.rows = vec![
+            vec![crate::config::AgentSidebarToken::Agent],
+            vec![crate::config::AgentSidebarToken::Custom("a".into())],
+            vec![crate::config::AgentSidebarToken::Custom("b".into())],
+        ];
+        let area = Rect::new(0, 0, 20, 6);
+
+        let metrics = agent_panel_scroll_metrics(&app, area);
+        assert_eq!(metrics.max_offset_from_bottom, 1);
+        assert_eq!(agent_panel_scroll_for_target(&app, area, 0, 2), 1);
+    }
+
+    #[test]
+    fn oversized_space_layout_is_clipped_to_the_section_body() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.sidebar_spaces.rows = vec![vec![crate::config::SpaceSidebarToken::Workspace]; 6];
+        let area = Rect::new(0, 0, 20, 10);
+        let workspace_area = workspace_list_rect(area, app.sidebar_section_split);
+        let body = workspace_list_body_rect(workspace_area, false);
+
+        let metrics = workspace_list_scroll_metrics(&app, workspace_area);
+        let (cards, _) = compute_workspace_list_areas(&app, area);
+
+        assert_eq!(metrics.viewport_rows, 1);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].ws_idx, 0);
+        assert_eq!(cards[0].rect.height, body.height);
+    }
+
+    #[test]
+    fn oversized_agent_override_is_clipped_to_the_panel_body() {
+        let mut app = crate::app::state::AppState::test_new();
+        let workspace = Workspace::test_new("one");
+        let pane_id = workspace.tabs[0].root_pane;
+        app.workspaces = vec![workspace];
+        app.ensure_test_terminals();
+        let terminal_id = app.workspaces[0].tabs[0].panes[&pane_id]
+            .attached_terminal_id
+            .clone();
+        app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(Agent::Claude);
+        app.sidebar_agents.rows_by_agent.insert(
+            "claude".into(),
+            vec![vec![crate::config::AgentSidebarToken::Agent]; 6],
+        );
+        let panel = Rect::new(0, 0, 20, 5);
+
+        let metrics = agent_panel_scroll_metrics(&app, panel);
+
+        assert_eq!(metrics.viewport_rows, 1);
+        assert_eq!(metrics.max_offset_from_bottom, 0);
+        let entry = agent_panel_entries(&app).pop().unwrap();
+        assert_eq!(
+            agent_entry_height_in_body(&app, &entry, agent_panel_body_rect(panel, false).height),
+            agent_panel_body_rect(panel, false).height
+        );
+    }
     #[test]
     fn render_sidebar_toggle_draws_expanded_collapse_icon() {
         let app = crate::app::state::AppState::test_new();

@@ -1226,6 +1226,7 @@ mod tests {
             agent_kind_label: agent_label.map(str::to_string),
             state: AgentState::Idle,
             seen: true,
+            state_entered_at: None,
             last_agent_state_change_seq: None,
             custom_status: None,
             state_labels: std::collections::HashMap::new(),

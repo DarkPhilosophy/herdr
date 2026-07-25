@@ -161,6 +161,20 @@ pub enum HostCursorModeConfig {
     Drawn,
 }
 
+/// What the agent panel's state text shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentStateDisplayConfig {
+    /// Plain status words: working, idle, done, blocked.
+    #[default]
+    Text,
+    /// Elapsed time in the current state (13s, 2m, 1h 2m), computed
+    /// natively from the state transition timestamp.
+    Elapsed,
+    /// Status word plus elapsed time (working 2m, blocked 10s).
+    Both,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SidebarCollapsedModeConfig {
@@ -921,10 +935,12 @@ pub struct UiConfig {
     pub window_title: String,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
-    /// herdr-mx: agent sidebar scope. Saved values are "current" or "all". Default: "all".
+    /// herdr-mx agent sidebar scope. Saved values are "current" or "all".
     pub agent_panel_scope: AgentPanelScopeConfig,
-    /// Agent status indicator style. Saved values are "dots" or "symbols". Default: "dots".
+    /// Agent status indicator style.
     pub status_indicators: StatusIndicatorStyle,
+    /// What the agent panel state text shows: text, elapsed, or both.
+    pub agent_state_display: AgentStateDisplayConfig,
     /// Accent color for highlights, borders, and navigation UI.
     /// Accepts hex (#89b4fa), named colors (cyan, blue), or RGB (rgb(137,180,250)).
     pub accent: String,
@@ -1640,6 +1656,7 @@ impl Default for UiConfig {
             agent_panel_sort: AgentPanelSortConfig::Spaces,
             agent_panel_scope: AgentPanelScopeConfig::All,
             status_indicators: StatusIndicatorStyle::Dots,
+            agent_state_display: AgentStateDisplayConfig::default(),
             accent: "cyan".into(),
             toast: ToastConfig::default(),
             sound: SoundConfig::default(),

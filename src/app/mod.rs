@@ -682,6 +682,7 @@ impl App {
             sidebar_sections_height_source,
             agent_panel_sort,
             status_indicators: config.ui.status_indicators,
+            agent_state_display: config.ui.agent_state_display,
             agent_view_override: None,
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
@@ -1622,6 +1623,7 @@ impl App {
                 // upstream also re-applies `config.ui.sidebar.agents/.spaces` here; those are the
                 // rejected token-row sidebar (DIVERGENCE.md). mx's sidebar preferences live in
                 // `state.sidebar_space` / `state.sidebar_agent` and are applied elsewhere.
+                self.state.agent_state_display = config.ui.agent_state_display;
                 self.state.sidebar_agents = config.ui.sidebar.agents.clone();
                 self.state.sidebar_spaces = config.ui.sidebar.spaces.clone();
                 self.state.sidebar_sections_config = config.ui.sidebar.resolved_sections();

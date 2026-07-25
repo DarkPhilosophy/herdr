@@ -148,6 +148,9 @@ pub struct TerminalState {
     pub state: AgentState,
     working_since: Option<Instant>,
     last_working_duration: Option<Duration>,
+    /// When the current `state` was entered (working start, blocked start,
+    /// completion time). Drives the native elapsed-time state display.
+    pub state_entered_at: Option<Instant>,
     pub last_agent_state_change_seq: Option<u64>,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
@@ -184,6 +187,7 @@ impl TerminalState {
             state: AgentState::Unknown,
             working_since: None,
             last_working_duration: None,
+            state_entered_at: None,
             last_agent_state_change_seq: None,
             revision: 0,
             launch_argv: None,
@@ -2274,6 +2278,7 @@ impl TerminalState {
             detected_agent = ?self.detected_agent,
             "effective agent state changed"
         );
+        self.state_entered_at = Some(now);
         Some(EffectiveStateChange {
             previous_agent_label,
             previous_known_agent,
