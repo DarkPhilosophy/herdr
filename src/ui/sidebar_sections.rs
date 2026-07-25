@@ -332,6 +332,7 @@ fn render_section_row(
             bar.label_spans.as_deref(),
             bar.fill.as_deref(),
             bar.empty.as_deref(),
+            bar.inner_spans.as_deref(),
             bar_columns,
             palette,
         ),
@@ -608,6 +609,7 @@ fn render_bar(
     label_spans: Option<&[SectionSpan]>,
     fill: Option<&str>,
     empty: Option<&str>,
+    inner_spans: Option<&[SectionSpan]>,
     columns: BarColumns,
     palette: &Palette,
 ) {
@@ -653,6 +655,37 @@ fn render_bar(
                 |empty| Style::default().fg(section_color(Some(empty), palette)),
             );
             cell.set_style(style);
+        }
+    }
+
+    // Text rendered on top of the bar cells: each visible character replaces
+    // the cell glyph at its column. Filled cells keep their fill color as
+    // background context; spans carry their own foreground (defaulting to the
+    // theme text color) so the text stays readable over both fill and empty
+    // regions.
+    if let Some(inner_spans) = inner_spans {
+        let mut column = 0u16;
+        for span in inner_spans {
+            for ch in span.text.chars() {
+                if column >= bar_width {
+                    break;
+                }
+                let cell = &mut buffer[(bar_x + column, area.y)];
+                let mut style = cell.style();
+                style = style.fg(section_color(span.color.as_deref(), palette));
+                if span.bold {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+                if span.dim {
+                    style = style.add_modifier(Modifier::DIM);
+                }
+                cell.set_symbol(ch.to_string().as_str());
+                cell.set_style(style);
+                column += 1;
+            }
+            if column >= bar_width {
+                break;
+            }
         }
     }
 
@@ -814,6 +847,7 @@ mod tests {
                 match_values: Vec::new(),
                 fill: Some("green".into()),
                 empty: Some("subtext0".into()),
+                inner_spans: None,
             },
         }
     }
@@ -1259,6 +1293,7 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
                     row0_columns,
                     &app.palette,
                 );
@@ -1270,6 +1305,7 @@ mod tests {
                     None,
                     None,
                     Some("100% \u{21bb}23h59"),
+                    None,
                     None,
                     None,
                     None,
@@ -1346,6 +1382,7 @@ mod tests {
                 match_values: Vec::new(),
                 fill: None,
                 empty: None,
+                inner_spans: None,
             },
         })
         .collect::<Vec<_>>();
@@ -1412,6 +1449,7 @@ mod tests {
                     match_values: Vec::new(),
                     fill: None,
                     empty: None,
+                    inner_spans: None,
                 },
             })
             .collect::<Vec<_>>();
@@ -1491,6 +1529,7 @@ mod tests {
                     match_values: Vec::new(),
                     fill: None,
                     empty: None,
+                    inner_spans: None,
                 },
             },
             SectionRow::Bar {
@@ -1504,6 +1543,7 @@ mod tests {
                     match_values: Vec::new(),
                     fill: None,
                     empty: None,
+                    inner_spans: None,
                 },
             },
         ];
@@ -1559,6 +1599,7 @@ mod tests {
                     match_values: Vec::new(),
                     fill: None,
                     empty: None,
+                    inner_spans: None,
                 },
             },
             SectionRow::Bar {
@@ -1585,6 +1626,7 @@ mod tests {
                     match_values: Vec::new(),
                     fill: None,
                     empty: None,
+                    inner_spans: None,
                 },
             },
         ];
@@ -1682,6 +1724,7 @@ mod tests {
                 match_values: Vec::new(),
                 fill: None,
                 empty: None,
+                inner_spans: None,
             },
         };
         let app = AppState::test_new();
@@ -1776,6 +1819,7 @@ mod tests {
                     match_values: vec![broker.into()],
                     fill: None,
                     empty: None,
+                    inner_spans: None,
                 },
             })
             .collect();
@@ -1838,6 +1882,7 @@ mod tests {
                         None,
                         None,
                         None,
+                        None,
                         BarColumns::default(),
                         &app.palette,
                     );
@@ -1872,6 +1917,7 @@ mod tests {
                     None,
                     Some("#123456"),
                     None,
+                    None,
                     BarColumns::default(),
                     &app.palette,
                 );
@@ -1886,6 +1932,7 @@ mod tests {
                     None,
                     None,
                     Some("mauve"),
+                    None,
                     BarColumns::default(),
                     &app.palette,
                 );
@@ -1901,6 +1948,70 @@ mod tests {
         for column in 5..10 {
             assert_eq!(buffer[(column, 1)].style().fg, Some(app.palette.mauve));
         }
+    }
+
+    #[test]
+    fn bar_inner_spans_render_on_top_of_cells() {
+        let app = AppState::test_new();
+        let mut terminal = Terminal::new(TestBackend::new(16, 2)).unwrap();
+        terminal
+            .draw(|frame| {
+                render_bar(
+                    frame,
+                    Rect::new(0, 0, 16, 1),
+                    0.68,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("green"),
+                    None,
+                    Some(&[SectionSpan {
+                        text: "32% free".into(),
+                        color: Some("yellow".into()),
+                        bold: true,
+                        dim: false,
+                    }]),
+                    BarColumns::default(),
+                    &app.palette,
+                );
+                render_bar(
+                    frame,
+                    Rect::new(0, 1, 16, 1),
+                    1.0,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    Some("red"),
+                    None,
+                    Some(&[SectionSpan {
+                        text: "0% free".into(),
+                        color: Some("red".into()),
+                        bold: true,
+                        dim: false,
+                    }]),
+                    BarColumns::default(),
+                    &app.palette,
+                );
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // inner text replaces the leading cell glyphs, keeping span styling
+        let row0: String = (0..8)
+            .map(|c| buffer[(c, 0)].symbol().to_string())
+            .collect();
+        assert_eq!(row0, "32% free");
+        assert_eq!(buffer[(0, 0)].style().fg, Some(app.palette.yellow));
+        assert!(buffer[(0, 0)].style().add_modifier.contains(Modifier::BOLD));
+        // cells past the inner text keep the bar glyphs
+        assert_eq!(buffer[(8, 0)].symbol(), "█");
+        let row1: String = (0..7)
+            .map(|c| buffer[(c, 1)].symbol().to_string())
+            .collect();
+        assert_eq!(row1, "0% free");
     }
 
     #[test]

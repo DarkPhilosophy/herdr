@@ -35,7 +35,7 @@ pub enum SectionRow {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct SectionBar {
     pub fraction: f64,
     /// Left-aligned title rendered before the bar cells.
@@ -70,6 +70,13 @@ pub struct SectionBar {
     /// remainder cells use the default dim style.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub empty: Option<String>,
+    /// Styled fragments rendered on top of the bar cells themselves
+    /// (left-aligned, starting at the first cell). The bar cells remain
+    /// visible underneath: span text replaces the cell glyph at those
+    /// columns, keeping the cell's background/color context.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 8))]
+    pub inner_spans: Option<Vec<SectionSpan>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -180,6 +187,7 @@ mod tests {
                         match_values: vec!["http://broker-a".into(), "http://broker-b".into(),],
                         fill: Some("#123456".into()),
                         empty: Some("subtext0".into()),
+                        inner_spans: None,
                     },
                 },
             ]

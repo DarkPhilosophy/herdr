@@ -115,6 +115,10 @@ fn normalize_section_rows(
                     match_values: normalize_bar_match_values(bar.match_values)?,
                     fill: normalize_section_color(bar.fill)?,
                     empty: normalize_section_color(bar.empty)?,
+                    inner_spans: bar
+                        .inner_spans
+                        .map(|spans| normalize_bar_spans(spans, "inner"))
+                        .transpose()?,
                 },
             }),
         })
@@ -379,6 +383,7 @@ mod tests {
                         match_values: Vec::new(),
                         fill: Some("cyan".into()),
                         empty: None,
+                        inner_spans: None,
                     },
                 }],
             ),
@@ -406,6 +411,7 @@ mod tests {
                             match_values: Vec::new(),
                             fill: None,
                             empty: None,
+                            inner_spans: None,
                         },
                     }],
                 ),
@@ -438,6 +444,7 @@ mod tests {
                         match_values: Vec::new(),
                         fill: None,
                         empty: None,
+                        inner_spans: None,
                     },
                 }],
             ),
@@ -503,6 +510,7 @@ mod tests {
                     match_values: vec!["http://broker-a\n".into(), "\t ".into()],
                     fill: None,
                     empty: None,
+                    inner_spans: None,
                 },
             },
             SectionRow::Bar {
@@ -516,6 +524,7 @@ mod tests {
                     match_values: Vec::new(),
                     fill: None,
                     empty: None,
+                    inner_spans: None,
                 },
             },
             SectionRow::Bar {
@@ -529,6 +538,7 @@ mod tests {
                     match_values: Vec::new(),
                     fill: None,
                     empty: None,
+                    inner_spans: None,
                 },
             },
         ])
@@ -639,6 +649,7 @@ mod tests {
                             match_values: Vec::new(),
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
+                            inner_spans: None,
                         },
                     },
                     SectionRow::Bar {
@@ -652,6 +663,7 @@ mod tests {
                             match_values: Vec::new(),
                             fill: None,
                             empty: None,
+                            inner_spans: None,
                         },
                     },
                 ],
@@ -688,6 +700,7 @@ mod tests {
                             match_values: Vec::new(),
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
+                            inner_spans: None,
                         },
                     },
                     SectionRow::Bar {
@@ -701,6 +714,7 @@ mod tests {
                             match_values: Vec::new(),
                             fill: None,
                             empty: None,
+                            inner_spans: None,
                         },
                     },
                 ]
