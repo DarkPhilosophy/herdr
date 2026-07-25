@@ -25,6 +25,10 @@ pub(crate) const SETTINGS_POPUP_WIDTH: u16 = 96;
 pub(crate) const SETTINGS_POPUP_BASE_HEIGHT: u16 = 32;
 
 pub(crate) fn settings_popup_height(app: &AppState) -> u16 {
+    if app.settings.section == SettingsSection::Plugins {
+        let list_rows = app.installed_plugins.len().max(1) as u16;
+        return (14 + list_rows).max(SETTINGS_POPUP_BASE_HEIGHT);
+    }
     if app.settings.section != SettingsSection::Integrations {
         return SETTINGS_POPUP_BASE_HEIGHT;
     }
@@ -165,6 +169,9 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
                 app.agent_border_labels_enabled(),
                 app.settings.list.selected,
             );
+        }
+        SettingsSection::Plugins => {
+            render_settings_plugins(app, frame, content_area);
         }
         SettingsSection::Sidebar => {
             render_settings_sidebar_config(app, frame, content_area);
@@ -409,6 +416,82 @@ fn render_settings_integrations(app: &AppState, frame: &mut Frame, area: Rect) {
 
     frame.render_widget(Paragraph::new(lines), rows[3]);
     frame.render_widget(footer, rows[5]);
+}
+
+fn render_settings_plugins(app: &AppState, frame: &mut Frame, area: Rect) {
+    let p = &app.palette;
+
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(2),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas::<4>(area);
+
+    frame.render_widget(
+        Paragraph::new("plugins").style(Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
+        rows[0],
+    );
+    frame.render_widget(
+        Paragraph::new(
+            "enter toggles a plugin on or off; disabled plugins stay installed but run nothing",
+        )
+        .style(Style::default().fg(p.overlay1))
+        .wrap(ratatui::widgets::Wrap { trim: false }),
+        rows[1],
+    );
+
+    let mut plugins: Vec<&crate::api::schema::InstalledPluginInfo> =
+        app.installed_plugins.values().collect();
+    // Order must match sorted_plugin_ids in app/input/settings.rs.
+    plugins.sort_by_key(|a| a.name.to_lowercase());
+
+    let mut lines = Vec::new();
+    for (index, plugin) in plugins.iter().enumerate() {
+        let selected = index == app.settings.list.selected;
+        let (marker, marker_style) = if plugin.enabled {
+            ("✓", Style::default().fg(p.green))
+        } else {
+            ("✗", Style::default().fg(p.overlay0))
+        };
+        let name_style = if plugin.enabled {
+            Style::default().fg(p.subtext0)
+        } else {
+            Style::default().fg(p.overlay0)
+        };
+        let status_style = if plugin.enabled {
+            Style::default().fg(p.overlay1)
+        } else {
+            Style::default().fg(p.overlay0)
+        };
+        let line = Line::from(vec![
+            Span::styled(format!(" {marker} "), marker_style),
+            Span::styled(format!("{:<28}", plugin.name), name_style),
+            Span::styled(
+                if plugin.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                status_style,
+            ),
+        ]);
+        lines.push(if selected {
+            line.style(Style::default().bg(p.surface0))
+        } else {
+            line
+        });
+    }
+
+    if lines.is_empty() {
+        lines.push(Line::from(Span::styled(
+            " no plugins installed",
+            Style::default().fg(p.overlay1),
+        )));
+    }
+
+    frame.render_widget(Paragraph::new(lines), rows[3]);
 }
 
 fn render_settings_theme(app: &AppState, frame: &mut Frame, area: Rect) {

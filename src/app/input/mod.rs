@@ -446,6 +446,7 @@ impl App {
                         SettingsAction::InstallRecommendedIntegrations => {
                             self.install_recommended_integrations()
                         }
+                        SettingsAction::TogglePlugin(plugin_id) => self.toggle_plugin(&plugin_id),
                     },
                     MouseAction::FocusWorkspace { ws_idx } => {
                         self.focus_workspace_idx_via_api(ws_idx)

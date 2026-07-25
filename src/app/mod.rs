@@ -1409,6 +1409,28 @@ impl App {
         self.state.integration_recommendations = crate::integration::integration_recommendations();
     }
 
+    /// Toggle a plugin's enabled flag through the same internal API path
+    /// the socket handlers use, keeping registry persistence in one place.
+    pub(crate) fn toggle_plugin(&mut self, plugin_id: &str) {
+        let Some(plugin) = self.state.installed_plugins.get(plugin_id) else {
+            return;
+        };
+        let enabled = !plugin.enabled;
+        let method = if enabled {
+            crate::api::schema::Method::PluginEnable(crate::api::schema::PluginSetEnabledParams {
+                plugin_id: plugin_id.to_string(),
+            })
+        } else {
+            crate::api::schema::Method::PluginDisable(crate::api::schema::PluginSetEnabledParams {
+                plugin_id: plugin_id.to_string(),
+            })
+        };
+        let _ = self.handle_api_request(crate::api::schema::Request {
+            id: format!("settings:toggle-plugin:{plugin_id}"),
+            method,
+        });
+    }
+
     pub(crate) fn install_recommended_integrations(&mut self) {
         let targets = self
             .state

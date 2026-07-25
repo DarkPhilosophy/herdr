@@ -38,6 +38,24 @@ pub(super) enum SettingsAction {
         preferences: crate::config::SidebarHostConfig,
     },
     InstallRecommendedIntegrations,
+    TogglePlugin(String),
+}
+
+/// Sorted plugin ids matching the rendered Plugins list order.
+fn sorted_plugin_ids(state: &AppState) -> Vec<String> {
+    let mut plugins: Vec<&crate::api::schema::InstalledPluginInfo> =
+        state.installed_plugins.values().collect();
+    plugins.sort_by_key(|a| a.name.to_lowercase());
+    plugins
+        .into_iter()
+        .map(|plugin| plugin.plugin_id.clone())
+        .collect()
+}
+
+fn selected_plugin_id(state: &AppState) -> Option<String> {
+    sorted_plugin_ids(state)
+        .get(state.settings.list.selected)
+        .cloned()
 }
 
 fn experiment_toggle_action(state: &AppState, idx: usize) -> Option<SettingsAction> {
@@ -98,6 +116,7 @@ impl App {
                 SettingsAction::InstallRecommendedIntegrations => {
                     self.install_recommended_integrations()
                 }
+                SettingsAction::TogglePlugin(plugin_id) => self.toggle_plugin(&plugin_id),
             }
         }
         if previous_section != SettingsSection::Integrations
@@ -692,6 +711,33 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
                 state.settings.list.selected = toast_delivery_index(state.toast_delivery());
             }
             KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
+                state.settings.section = SettingsSection::Plugins;
+                state.settings.list.selected = 0;
+            }
+            _ => {
+                if let Some(super::modal::ModalAction::Close) =
+                    super::modal::modal_action_from_key(&key, super::modal::SETTINGS_ACTIONS)
+                {
+                    cancel_settings(state);
+                }
+            }
+        },
+        SettingsSection::Plugins => match key.code {
+            KeyCode::Up | KeyCode::Char('k') => state.settings.list.move_prev(),
+            KeyCode::Down | KeyCode::Char('j') => state
+                .settings
+                .list
+                .move_next(state.installed_plugins.len().max(1)),
+            KeyCode::Enter | KeyCode::Char(' ') => {
+                if let Some(plugin_id) = selected_plugin_id(state) {
+                    return Some(SettingsAction::TogglePlugin(plugin_id));
+                }
+            }
+            KeyCode::BackTab | KeyCode::Left | KeyCode::Char('h') => {
+                state.settings.section = SettingsSection::PaneLabels;
+                state.settings.list.selected = usize::from(!state.agent_border_labels_enabled());
+            }
+            KeyCode::Tab | KeyCode::Right | KeyCode::Char('l') => {
                 state.settings.section = SettingsSection::Sidebar;
                 state.settings.list.selected = 0;
                 state.settings.sidebar_config_group = SidebarConfigGroup::Spaces;
@@ -707,8 +753,8 @@ pub(super) fn update_settings_state(state: &mut AppState, key: KeyEvent) -> Opti
         },
         SettingsSection::Sidebar => match key.code {
             KeyCode::BackTab => {
-                state.settings.section = SettingsSection::PaneLabels;
-                state.settings.list.selected = usize::from(!state.agent_border_labels_enabled());
+                state.settings.section = SettingsSection::Plugins;
+                state.settings.list.selected = 0;
                 state.settings.sidebar_config_editing = false;
             }
             KeyCode::Tab => {
@@ -867,6 +913,7 @@ pub(crate) fn open_settings_at(state: &mut AppState, section: SettingsSection) {
         SettingsSection::Sound => usize::from(!state.sound_enabled()),
         SettingsSection::Toast => toast_delivery_index(state.toast_delivery()),
         SettingsSection::PaneLabels => usize::from(!state.agent_border_labels_enabled()),
+        SettingsSection::Plugins => 0,
         SettingsSection::Sidebar => {
             state.settings.sidebar_config_group = SidebarConfigGroup::Spaces;
             0
@@ -967,6 +1014,11 @@ impl AppState {
                     None
                 }
             }
+            SettingsSection::Plugins => {
+                let list_y = area.y + 3;
+                let idx = (row.saturating_sub(list_y)) as usize;
+                (row >= list_y && idx < self.installed_plugins.len()).then_some(idx)
+            }
             SettingsSection::Sidebar => {
                 let list_y = area.y + 3;
                 let offset = row.checked_sub(list_y)?;
@@ -1001,6 +1053,7 @@ impl AppState {
                         SettingsSection::PaneLabels => {
                             usize::from(!self.agent_border_labels_enabled())
                         }
+                        SettingsSection::Plugins => 0,
                         SettingsSection::Sidebar => {
                             self.settings.sidebar_config_group = SidebarConfigGroup::Spaces;
                             self.settings.sidebar_config_editing = false;
@@ -1032,6 +1085,9 @@ impl AppState {
                         SettingsSection::PaneLabels => {
                             let enabled = idx == 0;
                             Some(SettingsAction::SaveAgentBorderLabels(enabled))
+                        }
+                        SettingsSection::Plugins => {
+                            selected_plugin_id(self).map(SettingsAction::TogglePlugin)
                         }
                         SettingsSection::Sidebar => {
                             self.settings.sidebar_config_editing = false;
@@ -1628,7 +1684,7 @@ mod tests {
             &mut state,
             KeyEvent::new(KeyCode::Tab, KeyModifiers::empty()),
         );
-        assert_eq!(state.settings.section, SettingsSection::Sidebar);
+        assert_eq!(state.settings.section, SettingsSection::Plugins);
 
         update_settings_state(
             &mut state,
@@ -1664,7 +1720,50 @@ mod tests {
             &mut state,
             KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()),
         );
-        assert_eq!(state.settings.section, SettingsSection::Sidebar);
+        assert_eq!(state.settings.section, SettingsSection::Plugins);
+
+        update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::BackTab, KeyModifiers::empty()),
+        );
+        assert_eq!(state.settings.section, SettingsSection::PaneLabels);
+    }
+
+    #[test]
+    fn plugins_enter_toggles_selected_plugin() {
+        let mut state = state_with_workspaces(&["test"]);
+        state.installed_plugins.insert(
+            "test.plugin".to_string(),
+            crate::api::schema::InstalledPluginInfo {
+                plugin_id: "test.plugin".to_string(),
+                name: "Test Plugin".to_string(),
+                version: "0.1.0".to_string(),
+                min_herdr_version: "0.7.0".to_string(),
+                description: None,
+                manifest_path: String::new(),
+                plugin_root: String::new(),
+                enabled: true,
+                platforms: None,
+                build: Vec::new(),
+                actions: Vec::new(),
+                panes: Vec::new(),
+                events: Vec::new(),
+                startup: Vec::new(),
+                link_handlers: Vec::new(),
+                source: crate::api::schema::PluginSourceInfo::default(),
+                warnings: Vec::new(),
+            },
+        );
+        open_settings_at(&mut state, SettingsSection::Plugins);
+
+        let action = update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::empty()),
+        );
+        assert_eq!(
+            action,
+            Some(SettingsAction::TogglePlugin("test.plugin".to_string()))
+        );
     }
 
     #[test]
