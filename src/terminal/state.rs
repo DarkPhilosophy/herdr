@@ -151,6 +151,10 @@ pub struct TerminalState {
     /// When the current `state` was entered (working start, blocked start,
     /// completion time). Drives the native elapsed-time state display.
     pub state_entered_at: Option<Instant>,
+    /// When the current work phase started (the last transition INTO
+    /// working). Kept through the working -> idle/done transition so the
+    /// completed label can show the frozen total duration.
+    pub work_started_at: Option<Instant>,
     pub last_agent_state_change_seq: Option<u64>,
     pub revision: u64,
     pub launch_argv: Option<Vec<String>>,
@@ -188,6 +192,7 @@ impl TerminalState {
             working_since: None,
             last_working_duration: None,
             state_entered_at: None,
+            work_started_at: None,
             last_agent_state_change_seq: None,
             revision: 0,
             launch_argv: None,
@@ -2279,6 +2284,18 @@ impl TerminalState {
             "effective agent state changed"
         );
         self.state_entered_at = Some(now);
+        match state {
+            // Work starts only from a non-working state; blocked -> working
+            // continues the same work phase instead of restarting the clock.
+            AgentState::Working
+                if previous_state != AgentState::Working
+                    && (self.work_started_at.is_none()
+                        || matches!(previous_state, AgentState::Idle | AgentState::Unknown)) =>
+            {
+                self.work_started_at = Some(now);
+            }
+            _ => {}
+        }
         Some(EffectiveStateChange {
             previous_agent_label,
             previous_known_agent,

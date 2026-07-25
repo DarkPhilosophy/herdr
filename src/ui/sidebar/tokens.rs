@@ -173,6 +173,7 @@ mod tests {
             state: AgentState::Working,
             seen: true,
             state_entered_at: None,
+            work_started_at: None,
             last_agent_state_change_seq: None,
             state_labels: std::collections::HashMap::new(),
             tokens: std::collections::HashMap::new(),

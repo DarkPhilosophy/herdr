@@ -35,6 +35,7 @@ pub(crate) struct AgentPanelEntry {
     pub state: AgentState,
     pub seen: bool,
     pub state_entered_at: Option<std::time::Instant>,
+    pub work_started_at: Option<std::time::Instant>,
     pub last_agent_state_change_seq: Option<u64>,
     pub custom_status: Option<String>,
     pub state_labels: HashMap<String, String>,
@@ -241,6 +242,7 @@ fn collect_agent_panel_entries_with_runtimes(
                         state: detail.state,
                         seen: detail.seen,
                         state_entered_at: detail.state_entered_at,
+                        work_started_at: detail.work_started_at,
                         last_agent_state_change_seq: detail.last_agent_state_change_seq,
                         custom_status: detail.tokens.get("status").cloned(),
                         state_labels: detail.state_labels,
@@ -1321,10 +1323,28 @@ fn agent_state_display_label(app: &AppState, entry: &AgentPanelEntry) -> String 
     if matches!(display, crate::config::AgentStateDisplayConfig::Text) {
         return plain.to_string();
     }
-    let Some(entered) = entry.state_entered_at else {
+
+    // Which elapsed time applies:
+    // - working: live time since the work phase started
+    // - blocked: live time since the block began
+    // - idle/done: FROZEN total work duration (work start -> completion),
+    //   not the time spent idling
+    let elapsed_secs: Option<u64> = match entry.state {
+        AgentState::Working => entry
+            .work_started_at
+            .or(entry.state_entered_at)
+            .map(|t| t.elapsed().as_secs()),
+        AgentState::Blocked => entry.state_entered_at.map(|t| t.elapsed().as_secs()),
+        AgentState::Idle => match (entry.work_started_at, entry.state_entered_at) {
+            (Some(start), Some(end)) if end >= start => Some(end.duration_since(start).as_secs()),
+            _ => None,
+        },
+        AgentState::Unknown => None,
+    };
+    let Some(secs) = elapsed_secs else {
         return plain.to_string();
     };
-    let elapsed = format_elapsed_short(entered.elapsed().as_secs());
+    let elapsed = format_elapsed_short(secs);
     match display {
         crate::config::AgentStateDisplayConfig::Elapsed => elapsed,
         crate::config::AgentStateDisplayConfig::Both => format!("{plain} {elapsed}"),

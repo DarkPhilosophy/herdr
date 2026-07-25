@@ -1227,6 +1227,7 @@ mod tests {
             state: AgentState::Idle,
             seen: true,
             state_entered_at: None,
+            work_started_at: None,
             last_agent_state_change_seq: None,
             custom_status: None,
             state_labels: std::collections::HashMap::new(),
