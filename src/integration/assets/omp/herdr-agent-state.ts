@@ -3,29 +3,75 @@
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=omp
 // HERDR_INTEGRATION_VERSION=8
+// LOCAL PATCH (cubix): daemon-aware pane identity. Under `omp --daemon`
+// this extension runs in the shared daemon process, whose env belongs to
+// whichever pane spawned the daemon first. Pane identity is resolved
+// per-session from `ctx.clientEnv` (OMP forwards the attached client's
+// terminal-identity env), falling back to `process.env` in direct mode.
 // @ts-nocheck
 
 import net from "node:net";
 import path from "node:path";
 
-const HERDR_ENV = process.env.HERDR_ENV;
-const socketPath = process.env.HERDR_SOCKET_PATH;
-const socketEndpoint =
-  process.platform === "win32" && socketPath ? `\\\\.\\pipe\\${socketPath}` : socketPath;
-const paneId = process.env.HERDR_PANE_ID;
 const source = "herdr:omp";
 
-function enabled() {
-  return HERDR_ENV === "1" && !!socketPath && !!paneId;
+type AgentState = "working" | "blocked" | "idle";
+
+type QueuedState = {
+  state: AgentState;
+  message?: string;
+  seq: number;
+};
+
+type HerdrIdentity = {
+  socketEndpoint: string;
+  paneId: string;
+  idleDebounceMs: number;
+  retryGraceMs: number;
+};
+
+const retryableErrorPattern =
+  /overloaded|provider.?returned.?error|rate.?limit|too many requests|429|500|502|503|504|service.?unavailable|server.?error|internal.?error|network.?error|connection.?error|connection.?refused|connection.?lost|websocket.?closed|websocket.?error|other side closed|fetch failed|upstream.?connect|reset before headers|socket hang up|ended without|http2 request did not get a response|timed? out|timeout|terminated|retry delay/i;
+
+function parseDuration(raw: string | undefined, fallback: number): number {
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return fallback;
+  }
+  return parsed;
 }
 
-let requestQueue = Promise.resolve();
+function socketEndpointFor(socketPath: string): string {
+  return process.platform === "win32" ? `\\\\.\\pipe\\${socketPath}` : socketPath;
+}
 
-function sendRequestAttempt(request: unknown, timeoutMs: number): Promise<boolean> {
-  if (!enabled()) {
-    return Promise.resolve(true);
+/**
+ * Resolve the herdr pane identity for THIS session's attached client.
+ * Hosted sessions get the client terminal env via ctx.clientEnv; direct mode
+ * falls back to this process's env (the historical behavior).
+ */
+function resolveIdentity(ctx: any): HerdrIdentity | undefined {
+  const env: Record<string, string | undefined> = ctx?.clientEnv ?? process.env;
+  if (env.HERDR_ENV !== "1") {
+    return undefined;
   }
+  const socketPath = env.HERDR_SOCKET_PATH;
+  const paneId = env.HERDR_PANE_ID;
+  if (!socketPath || !paneId) {
+    return undefined;
+  }
+  return {
+    socketEndpoint: socketEndpointFor(socketPath),
+    paneId,
+    idleDebounceMs: parseDuration(env.HERDR_OMP_IDLE_DEBOUNCE_MS, 250),
+    retryGraceMs: parseDuration(env.HERDR_OMP_RETRY_GRACE_MS, 2500),
+  };
+}
 
+function sendRequestAttempt(socketEndpoint: string, request: unknown, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
     let done = false;
     let timeout: ReturnType<typeof setTimeout> | undefined;
@@ -39,7 +85,7 @@ function sendRequestAttempt(request: unknown, timeoutMs: number): Promise<boolea
       resolve(delivered);
     };
 
-    const socket = net.createConnection(socketEndpoint!);
+    const socket = net.createConnection(socketEndpoint);
     socket.on("error", () => finish(false));
     socket.on("connect", () => socket.write(`${JSON.stringify(request)}\n`));
     socket.on("data", () => finish(true));
@@ -204,7 +250,6 @@ async function drainStateQueue(): Promise<void> {
     }
   }
 }
-
 function lastAssistantMessage(messages: unknown[]): any | undefined {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i] as any;
@@ -239,9 +284,14 @@ function askBlockedMessage(args: any): string {
 }
 
 export default function (pi) {
-  if (!enabled()) {
-    return;
-  }
+  // Per-session state: this factory runs once per OMP session (also inside the
+  // shared daemon), so pane identity and the report pipeline live here rather
+  // than at module scope where the first pane would win for every session.
+  let identity: HerdrIdentity | undefined;
+  let requestQueue = Promise.resolve();
+  let reportSeq = Date.now() * 1000;
+  let currentAgentSessionId: string | undefined;
+  let currentAgentSessionPath: string | undefined;
 
   let agentActive = false;
   let retryHoldActive = false;
@@ -254,6 +304,177 @@ export default function (pi) {
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
   let retryTimer: ReturnType<typeof setTimeout> | undefined;
   let rootSession = false;
+  let sendInFlight = false;
+  let queuedState: QueuedState | undefined;
+
+  function refreshIdentity(ctx: any): boolean {
+    // The attached client's env is authoritative: a reattach from a
+    // non-herdr terminal must stop reporting to the previous pane, so a
+    // failed resolve clears the identity instead of keeping the stale one.
+    const previous = identity;
+    identity = resolveIdentity(ctx);
+    if (
+      previous &&
+      (identity === undefined ||
+        previous.paneId !== identity.paneId ||
+        previous.socketEndpoint !== identity.socketEndpoint)
+    ) {
+      // The session moved to another terminal: drop state queued for the old
+      // pane and free it so it does not stay stuck on the last reported
+      // state. Clearing lastState guarantees the caller's next publishState
+      // (which runs after updateSessionRef) reaches the new pane even when
+      // the agent state itself did not change.
+      queuedState = undefined;
+      lastState = undefined;
+      lastMessage = undefined;
+      void releaseAgentFor(previous);
+    }
+    return identity !== undefined;
+  }
+
+  function nextReportSeq(): number {
+    reportSeq += 1;
+    return reportSeq;
+  }
+
+  async function sendRequestNow(socketEndpoint: string, request: unknown): Promise<void> {
+    if (await sendRequestAttempt(socketEndpoint, request, 500)) {
+      return;
+    }
+    await sendRequestAttempt(socketEndpoint, request, 1500);
+  }
+
+  // Route is snapshotted at enqueue time: an identity switch (reattach to a
+  // different pane) must not redirect queued/retried sends to the new socket.
+  function sendRequest(target: HerdrIdentity, request: unknown): Promise<void> {
+    const socketEndpoint = target.socketEndpoint;
+    requestQueue = requestQueue.then(
+      () => sendRequestNow(socketEndpoint, request),
+      () => sendRequestNow(socketEndpoint, request),
+    );
+    return requestQueue;
+  }
+
+  function updateSessionRef(ctx: any): void {
+    try {
+      const file = ctx?.sessionManager?.getSessionFile?.();
+      currentAgentSessionPath =
+        typeof file === "string" && file.startsWith("/") ? file : undefined;
+    } catch {
+      currentAgentSessionPath = undefined;
+    }
+
+    try {
+      const id = ctx?.sessionManager?.getSessionId?.();
+      currentAgentSessionId = typeof id === "string" && id.length > 0 ? id : undefined;
+    } catch {
+      currentAgentSessionId = undefined;
+    }
+  }
+
+  function withSessionRef(params: Record<string, unknown>): Record<string, unknown> {
+    if (currentAgentSessionPath) {
+      return { ...params, agent_session_path: currentAgentSessionPath };
+    }
+    if (currentAgentSessionId) {
+      return { ...params, agent_session_id: currentAgentSessionId };
+    }
+    return params;
+  }
+
+  function currentSessionRef(): Record<string, unknown> | undefined {
+    if (currentAgentSessionPath) {
+      return { agent_session_path: currentAgentSessionPath };
+    }
+    if (currentAgentSessionId) {
+      return { agent_session_id: currentAgentSessionId };
+    }
+    return undefined;
+  }
+
+  function reportSession(sessionStartSource = "startup"): Promise<void> {
+    const target = identity;
+    const sessionRef = currentSessionRef();
+    if (!sessionRef || !target) {
+      return Promise.resolve();
+    }
+
+    return sendRequest(target, {
+      id: `${source}:session:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      method: "pane.report_agent_session",
+      params: {
+        pane_id: target.paneId,
+        source,
+        agent: "omp",
+        seq: nextReportSeq(),
+        session_start_source: sessionStartSource,
+        ...sessionRef,
+      },
+    });
+  }
+
+  function sendState(state: AgentState, message?: string, seq = nextReportSeq()): Promise<void> {
+    const target = identity;
+    if (!target) {
+      return Promise.resolve();
+    }
+    return sendRequest(target, {
+      id: `${source}:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      method: "pane.report_agent",
+      params: withSessionRef({
+        pane_id: target.paneId,
+        source,
+        agent: "omp",
+        state,
+        message,
+        seq,
+      }),
+    });
+  }
+
+  function releaseAgentFor(target: HerdrIdentity): Promise<void> {
+    // Only used for identity switches (reattach to a different pane). Process
+    // exit stays process-owned: herdr releases lifecycle authority itself when
+    // the agent process dies, so session_shutdown deliberately does not send
+    // this.
+    return sendRequest(target, {
+      id: `${source}:release:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      method: "pane.release_agent",
+      params: {
+        pane_id: target.paneId,
+        source,
+        agent: "omp",
+        seq: nextReportSeq(),
+      },
+    });
+  }
+
+  function queueState(state: AgentState, message?: string): void {
+    queuedState = { state, message, seq: nextReportSeq() };
+    if (!sendInFlight) {
+      void drainStateQueue();
+    }
+  }
+
+  async function drainStateQueue(): Promise<void> {
+    if (sendInFlight) {
+      return;
+    }
+
+    sendInFlight = true;
+    try {
+      while (queuedState) {
+        const next = queuedState;
+        queuedState = undefined;
+        await sendState(next.state, next.message, next.seq);
+      }
+    } finally {
+      sendInFlight = false;
+      if (queuedState) {
+        void drainStateQueue();
+      }
+    }
+  }
 
   function clearTimer(timer: ReturnType<typeof setTimeout> | undefined) {
     if (timer) {
@@ -303,7 +524,7 @@ export default function (pi) {
     idleTimer = setTimeout(() => {
       idleTimer = undefined;
       publishState();
-    }, idleDebounceMs);
+    }, identity?.idleDebounceMs ?? 250);
     idleTimer.unref?.();
   }
 
@@ -319,12 +540,15 @@ export default function (pi) {
       retryHoldActive = false;
       failureBlocked = true;
       publishState();
-    }, retryGraceMs);
+    }, identity?.retryGraceMs ?? 2500);
     retryTimer.unref?.();
   }
 
   function activateRootSession(ctx: any, sessionStartSource = "startup"): boolean {
     if (ctx?.hasUI !== true) {
+      return false;
+    }
+    if (!refreshIdentity(ctx)) {
       return false;
     }
     rootSession = true;
@@ -389,6 +613,7 @@ export default function (pi) {
     if (!rootSession && !activateRootSession(ctx)) {
       return;
     }
+    refreshIdentity(ctx);
     updateSessionRef(ctx);
     void reportSession();
     clearPendingTimers();

@@ -2871,7 +2871,6 @@ fn bundled_integration_assets_report_session_refs() {
 fn process_owned_integration_assets_do_not_report_release() {
     for (name, asset) in [
         ("pi", PI_EXTENSION_ASSET),
-        ("omp", OMP_EXTENSION_ASSET),
         ("mastracode", MASTRACODE_HOOK_ASSET),
         ("kimi", KIMI_HOOK_ASSET),
         ("kilo", KILO_PLUGIN_ASSET),
@@ -2882,6 +2881,19 @@ fn process_owned_integration_assets_do_not_report_release() {
             "{name} process exit should own lifecycle release"
         );
     }
+
+    // The omp extension may send pane.release_agent only when the attached
+    // client identity changes (reattach to another pane). Process exit stays
+    // process-owned: session_shutdown must not release lifecycle authority.
+    let shutdown = OMP_EXTENSION_ASSET
+        .find("pi.on(\"session_shutdown\"")
+        .expect("omp extension should handle session_shutdown");
+    let shutdown_handler = &OMP_EXTENSION_ASSET[shutdown..];
+    let handler_end = shutdown_handler.find("});").unwrap_or(shutdown_handler.len());
+    assert!(
+        !shutdown_handler[..handler_end].contains("releaseAgent"),
+        "omp session_shutdown must not release lifecycle authority"
+    );
 }
 
 #[test]
@@ -2997,13 +3009,13 @@ fn omp_socket_requests_are_serialized() {
         .find("let requestQueue = Promise.resolve();")
         .expect("omp extension should keep socket reports ordered");
     let send_request = OMP_EXTENSION_ASSET[queue..]
-        .find("function sendRequest(request: unknown): Promise<void>")
+        .find("function sendRequest(target: HerdrIdentity, request: unknown): Promise<void>")
         .expect("omp extension should wrap socket sends in an ordered queue");
     let queued_send = OMP_EXTENSION_ASSET[queue + send_request..]
         .find("requestQueue = requestQueue.then(")
         .expect("omp extension should serialize socket requests through the queue");
     let raw_send = OMP_EXTENSION_ASSET[queue + send_request..]
-        .find("sendRequestNow(request)")
+        .find("sendRequestNow(socketEndpoint, request)")
         .expect("omp extension should enqueue the raw socket send");
 
     assert!(queued_send < raw_send);
