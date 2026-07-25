@@ -1698,15 +1698,15 @@ impl SettingsSection {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Theme => "theme",
-            Self::Indicators => "indicators",
-            Self::Sound => "sound",
-            Self::Toast => "toasts",
-            Self::PaneLabels => "pane labels",
-            Self::Plugins => "plugins",
-            Self::Sidebar => "sidebar",
-            Self::Experiments => "experiments",
-            Self::Integrations => "integrations",
+            Self::Theme => "Theme",
+            Self::Indicators => "Indicators",
+            Self::Sound => "Sound",
+            Self::Toast => "Toasts",
+            Self::PaneLabels => "Pane Labels",
+            Self::Plugins => "Plugins",
+            Self::Sidebar => "Sidebar",
+            Self::Experiments => "Experiments",
+            Self::Integrations => "Integrations",
         }
     }
 }

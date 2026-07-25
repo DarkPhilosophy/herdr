@@ -507,8 +507,8 @@ fn render_mobile_switcher_content(
         let title = app
             .agent_view_override
             .as_ref()
-            .map(|view| format!("agents · {}", view.label.as_deref().unwrap_or("filtered")))
-            .unwrap_or_else(|| "agents".to_string());
+            .map(|view| format!("Agents · {}", view.label.as_deref().unwrap_or("filtered")))
+            .unwrap_or_else(|| "Agents".to_string());
         render_section_title_at(
             frame,
             viewport,
@@ -577,7 +577,7 @@ fn render_mobile_switcher_content(
         content,
         doc_y,
         app.mobile_switcher_scroll,
-        "spaces",
+        "Spaces",
         p,
     );
     doc_y += 1;

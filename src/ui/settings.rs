@@ -84,7 +84,7 @@ pub(super) fn render_settings_overlay(app: &AppState, frame: &mut Frame, area: R
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            " settings",
+            " Settings",
             Style::default().fg(p.text).add_modifier(Modifier::BOLD),
         )])),
         header_rows[0],
@@ -429,7 +429,7 @@ fn render_settings_integrations(app: &AppState, frame: &mut Frame, area: Rect) {
     .areas::<6>(area);
 
     frame.render_widget(
-        Paragraph::new("agent integrations")
+        Paragraph::new("Agent integrations")
             .style(Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
         rows[0],
     );
@@ -492,7 +492,7 @@ fn render_settings_plugins(app: &AppState, frame: &mut Frame, area: Rect) {
     .areas::<3>(area);
 
     frame.render_widget(
-        Paragraph::new("plugins").style(Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
+        Paragraph::new("Plugins").style(Style::default().fg(p.text).add_modifier(Modifier::BOLD)),
         rows[0],
     );
     frame.render_widget(
