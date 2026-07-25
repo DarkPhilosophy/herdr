@@ -8,7 +8,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::api::schema::{SectionBar, SectionRow, SectionSpan};
+use crate::api::schema::{SectionBar, SectionBarInnerAlign, SectionRow, SectionSpan};
 use crate::app::state::{AppState, Palette};
 use crate::config::{CustomSidebarSectionConfig, SidebarSectionPlacement};
 
@@ -333,6 +333,8 @@ fn render_section_row(
             bar.fill.as_deref(),
             bar.empty.as_deref(),
             bar.inner_spans.as_deref(),
+            bar.inner_align,
+            bar.solid,
             bar_columns,
             palette,
         ),
@@ -610,6 +612,8 @@ fn render_bar(
     fill: Option<&str>,
     empty: Option<&str>,
     inner_spans: Option<&[SectionSpan]>,
+    inner_align: Option<SectionBarInnerAlign>,
+    solid: bool,
     columns: BarColumns,
     palette: &Palette,
 ) {
@@ -630,7 +634,29 @@ fn render_bar(
     let buffer = frame.buffer_mut();
     for offset in 0..bar_width {
         let cell = &mut buffer[(bar_x + offset, area.y)];
-        if offset < filled {
+        if solid {
+            // Solid mode: the filled region is a solid background strip (no
+            // glyph), matching omp-style usage bars. Empty region keeps the
+            // terminal default background.
+            if offset < filled {
+                let color = fill.map_or_else(
+                    || {
+                        let position = if bar_width <= 1 {
+                            0.0
+                        } else {
+                            f64::from(offset) / f64::from(bar_width - 1)
+                        };
+                        lerp_color(palette.green, palette.red, position)
+                    },
+                    |fill| section_color(Some(fill), palette),
+                );
+                cell.set_symbol(" ");
+                cell.set_style(Style::default().bg(color));
+            } else {
+                cell.set_symbol(" ");
+                cell.set_style(Style::default());
+            }
+        } else if offset < filled {
             let color = fill.map_or_else(
                 || {
                     let position = if bar_width <= 1 {
@@ -664,7 +690,24 @@ fn render_bar(
     // theme text color) so the text stays readable over both fill and empty
     // regions.
     if let Some(inner_spans) = inner_spans {
-        let mut column = 0u16;
+        let inner_width: u16 = inner_spans
+            .iter()
+            .map(|span| span.text.chars().count() as u16)
+            .sum();
+        let mut column = match inner_align {
+            Some(SectionBarInnerAlign::Right) => bar_width.saturating_sub(inner_width),
+            // At the boundary: text starts where the filled region ends
+            // (solid usage bars: the '<pct>% free' label leads the empty
+            // region right after the colored used strip).
+            Some(SectionBarInnerAlign::Boundary) => {
+                if filled + inner_width > bar_width {
+                    bar_width.saturating_sub(inner_width)
+                } else {
+                    filled
+                }
+            }
+            _ => 0,
+        };
         for span in inner_spans {
             for ch in span.text.chars() {
                 if column >= bar_width {
@@ -672,7 +715,15 @@ fn render_bar(
                 }
                 let cell = &mut buffer[(bar_x + column, area.y)];
                 let mut style = cell.style();
-                style = style.fg(section_color(span.color.as_deref(), palette));
+                // In solid mode the cell already carries the fill as
+                // background; span foreground must contrast with it, so the
+                // default shifts to a dark surface color.
+                let fg = match span.color.as_deref() {
+                    Some(color) => section_color(Some(color), palette),
+                    None if solid => palette.surface0,
+                    None => palette.text,
+                };
+                style = style.fg(fg);
                 if span.bold {
                     style = style.add_modifier(Modifier::BOLD);
                 }
@@ -848,6 +899,8 @@ mod tests {
                 fill: Some("green".into()),
                 empty: Some("subtext0".into()),
                 inner_spans: None,
+                inner_align: None,
+                solid: false,
             },
         }
     }
@@ -1294,6 +1347,8 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    false,
                     row0_columns,
                     &app.palette,
                 );
@@ -1309,6 +1364,8 @@ mod tests {
                     None,
                     None,
                     None,
+                    None,
+                    false,
                     row1_columns,
                     &app.palette,
                 );
@@ -1383,6 +1440,8 @@ mod tests {
                 fill: None,
                 empty: None,
                 inner_spans: None,
+                inner_align: None,
+                solid: false,
             },
         })
         .collect::<Vec<_>>();
@@ -1450,6 +1509,8 @@ mod tests {
                     fill: None,
                     empty: None,
                     inner_spans: None,
+                    inner_align: None,
+                    solid: false,
                 },
             })
             .collect::<Vec<_>>();
@@ -1530,6 +1591,8 @@ mod tests {
                     fill: None,
                     empty: None,
                     inner_spans: None,
+                    inner_align: None,
+                    solid: false,
                 },
             },
             SectionRow::Bar {
@@ -1544,6 +1607,8 @@ mod tests {
                     fill: None,
                     empty: None,
                     inner_spans: None,
+                    inner_align: None,
+                    solid: false,
                 },
             },
         ];
@@ -1600,6 +1665,8 @@ mod tests {
                     fill: None,
                     empty: None,
                     inner_spans: None,
+                    inner_align: None,
+                    solid: false,
                 },
             },
             SectionRow::Bar {
@@ -1627,6 +1694,8 @@ mod tests {
                     fill: None,
                     empty: None,
                     inner_spans: None,
+                    inner_align: None,
+                    solid: false,
                 },
             },
         ];
@@ -1725,6 +1794,8 @@ mod tests {
                 fill: None,
                 empty: None,
                 inner_spans: None,
+                inner_align: None,
+                solid: false,
             },
         };
         let app = AppState::test_new();
@@ -1820,6 +1891,8 @@ mod tests {
                     fill: None,
                     empty: None,
                     inner_spans: None,
+                    inner_align: None,
+                    solid: false,
                 },
             })
             .collect();
@@ -1883,6 +1956,8 @@ mod tests {
                         None,
                         None,
                         None,
+                        None,
+                        false,
                         BarColumns::default(),
                         &app.palette,
                     );
@@ -1918,6 +1993,8 @@ mod tests {
                     Some("#123456"),
                     None,
                     None,
+                    None,
+                    false,
                     BarColumns::default(),
                     &app.palette,
                 );
@@ -1933,6 +2010,8 @@ mod tests {
                     None,
                     Some("mauve"),
                     None,
+                    None,
+                    false,
                     BarColumns::default(),
                     &app.palette,
                 );
@@ -1973,6 +2052,8 @@ mod tests {
                         bold: true,
                         dim: false,
                     }]),
+                    None,
+                    false,
                     BarColumns::default(),
                     &app.palette,
                 );
@@ -1993,6 +2074,8 @@ mod tests {
                         bold: true,
                         dim: false,
                     }]),
+                    None,
+                    false,
                     BarColumns::default(),
                     &app.palette,
                 );

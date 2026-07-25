@@ -77,6 +77,25 @@ pub struct SectionBar {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(max = 8))]
     pub inner_spans: Option<Vec<SectionSpan>>,
+    /// Alignment for `inner_spans` inside the bar: left (default) or right.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inner_align: Option<SectionBarInnerAlign>,
+    /// When true, bar cells render as solid background blocks (space glyph
+    /// with the fill color as background) instead of █/░ glyphs. This is the
+    /// omp-style usage bar look: a solid colored strip with text on top.
+    #[serde(default, skip_serializing_if = "super::is_false")]
+    pub solid: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum SectionBarInnerAlign {
+    Left,
+    Right,
+    /// Text starts at the fill boundary (column `filled`), flowing right
+    /// over the remaining cells; falls back to 0 when the text is wider
+    /// than the remaining space.
+    Boundary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -188,6 +207,8 @@ mod tests {
                         fill: Some("#123456".into()),
                         empty: Some("subtext0".into()),
                         inner_spans: None,
+                        inner_align: None,
+                        solid: false,
                     },
                 },
             ]

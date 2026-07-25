@@ -119,6 +119,8 @@ fn normalize_section_rows(
                         .inner_spans
                         .map(|spans| normalize_bar_spans(spans, "inner"))
                         .transpose()?,
+                    inner_align: bar.inner_align,
+                    solid: bar.solid,
                 },
             }),
         })
@@ -384,6 +386,8 @@ mod tests {
                         fill: Some("cyan".into()),
                         empty: None,
                         inner_spans: None,
+                        inner_align: None,
+                        solid: false,
                     },
                 }],
             ),
@@ -412,6 +416,8 @@ mod tests {
                             fill: None,
                             empty: None,
                             inner_spans: None,
+                            inner_align: None,
+                            solid: false,
                         },
                     }],
                 ),
@@ -445,6 +451,8 @@ mod tests {
                         fill: None,
                         empty: None,
                         inner_spans: None,
+                        inner_align: None,
+                        solid: false,
                     },
                 }],
             ),
@@ -511,6 +519,8 @@ mod tests {
                     fill: None,
                     empty: None,
                     inner_spans: None,
+                    inner_align: None,
+                    solid: false,
                 },
             },
             SectionRow::Bar {
@@ -525,6 +535,8 @@ mod tests {
                     fill: None,
                     empty: None,
                     inner_spans: None,
+                    inner_align: None,
+                    solid: false,
                 },
             },
             SectionRow::Bar {
@@ -539,6 +551,8 @@ mod tests {
                     fill: None,
                     empty: None,
                     inner_spans: None,
+                    inner_align: None,
+                    solid: false,
                 },
             },
         ])
@@ -650,6 +664,8 @@ mod tests {
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
                             inner_spans: None,
+                            inner_align: None,
+                            solid: false,
                         },
                     },
                     SectionRow::Bar {
@@ -664,6 +680,8 @@ mod tests {
                             fill: None,
                             empty: None,
                             inner_spans: None,
+                            inner_align: None,
+                            solid: false,
                         },
                     },
                 ],
@@ -701,6 +719,8 @@ mod tests {
                             fill: Some("green".into()),
                             empty: Some("#123456".into()),
                             inner_spans: None,
+                            inner_align: None,
+                            solid: false,
                         },
                     },
                     SectionRow::Bar {
@@ -715,6 +735,8 @@ mod tests {
                             fill: None,
                             empty: None,
                             inner_spans: None,
+                            inner_align: None,
+                            solid: false,
                         },
                     },
                 ]
