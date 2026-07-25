@@ -1,0 +1,97 @@
+id = "jcode"
+version = "2026.07.25.1"
+min_engine_version = 1
+updated_at = "2026-07-25T00:00:00Z"
+
+# Jcode agent detection, ported from the legacy hardcoded heuristics
+# (src/detect/agents/jcode.rs in the original feat/support-jcode branch).
+#
+# Working: spinner activity, tool execution, embedding indicators
+# Blocked: approval prompts, session waiting
+# Idle: prompt box visible, no active indicators
+
+[[rules]]
+id = "session_waiting_blocker"
+state = "blocked"
+priority = 300
+region = "whole_recent"
+visible_blocker = true
+any = [
+  { contains = ["waiting for session"] },
+  { contains = ["awaiting input"] },
+]
+
+[[rules]]
+id = "approval_prompt_blocker"
+state = "blocked"
+priority = 290
+region = "whole_recent"
+visible_blocker = true
+any = [
+  { contains = ["approve?"] },
+  { contains = ["confirm action"] },
+]
+
+[[rules]]
+id = "braille_spinner_working"
+state = "working"
+priority = 110
+region = "whole_recent"
+visible_working = true
+line_regex = ['^\s*[\u2800-\u28FF]']
+
+[[rules]]
+id = "processing_working"
+state = "working"
+priority = 100
+region = "whole_recent"
+visible_working = true
+any = [
+  { contains = ["processing"] },
+  { contains = ["embedding"] },
+]
+
+[[rules]]
+id = "tool_execution_working"
+state = "working"
+priority = 95
+region = "whole_recent"
+visible_working = true
+any = [
+  { contains = ["running tool"] },
+  { contains = ["executing"] },
+]
+
+[[rules]]
+id = "session_activity_working"
+state = "working"
+priority = 90
+region = "whole_recent"
+visible_working = true
+any = [
+  { contains = ["session uuid:"] },
+  { contains = ["context:"] },
+]
+all = [
+  { any = [{ contains = ["tokens"] }, { contains = ["working"] }] },
+]
+
+[[rules]]
+id = "session_ready_idle"
+state = "idle"
+priority = 50
+region = "whole_recent"
+visible_idle = true
+any = [
+  { contains = ["session ready"] },
+  { contains = ["ready for input"] },
+]
+
+[[rules]]
+id = "prompt_box_idle"
+state = "idle"
+priority = 40
+region = "whole_recent"
+visible_idle = true
+contains = ["❯"]
+not = [{ contains = ["processing"] }]
