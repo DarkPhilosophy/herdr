@@ -546,6 +546,13 @@ pub enum ClientMessage {
     /// The direct command was written and flushed; terminal response timing starts now. Appended
     /// after the mx variants, see `GraphicsTransmissionResult`.
     GraphicsTransmissionStarted { transfer_id: u64, image_id: u32 },
+
+    /// Session-scoped secrets and environment forwarded by the client for the lifetime of this
+    /// connection only. Tokens are redacted in logs and purged on disconnect.
+    SessionEnv {
+        tokens: Vec<(String, crate::protocol::SecretString)>,
+        env: Vec<(String, String)>,
+    },
 }
 
 /// What a [`ClientMessage::RetargetTerminal`] asks the connection to become.

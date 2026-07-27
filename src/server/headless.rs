@@ -320,6 +320,10 @@ pub struct HeadlessServer {
     pending_alt_screen_reads: Vec<crate::server::alt_screen_read::PendingAltScreenRead>,
     /// Reads waiting for an alternate-screen traversal of the same terminal to finish.
     deferred_alt_screen_reads: Vec<api::ApiRequestMessage>,
+    /// Session-scoped tokens+env forwarded per client for its connection
+    /// lifetime, purged when the client detaches or disconnects. Tokens are
+    /// secrets (never logged); env is plain passthrough.
+    session_env: HashMap<u64, (Vec<(String, crate::protocol::SecretString)>, Vec<(String, String)>)>,
     /// Monotonic activity counter used to pick the most recently active client.
     next_activity_stamp: u64,
     /// Configured virtual terminal size used when no clients are connected.
@@ -519,6 +523,7 @@ impl HeadlessServer {
             terminal_attach_owners: HashMap::new(),
             pending_alt_screen_reads: Vec::new(),
             deferred_alt_screen_reads: Vec::new(),
+            session_env: HashMap::new(),
             next_activity_stamp: 1,
             headless_size,
             effective_size: headless_size,
@@ -3590,8 +3595,17 @@ impl HeadlessServer {
                 self.resize_shared_runtime_to_effective_size();
                 true
             }
+            ServerEvent::ClientSessionEnv {
+                client_id,
+                tokens,
+                env,
+            } => {
+                self.session_env.insert(client_id, (tokens, env));
+                false
+            }
             ServerEvent::ClientDetach { client_id } => {
                 info!(client_id, "client detached");
+                self.session_env.remove(&client_id);
                 self.send_terminal_stream_detach_shutdown(client_id);
                 self.remove_client_and_resize_if_needed(client_id);
                 true
@@ -3623,6 +3637,7 @@ impl HeadlessServer {
             }
             ServerEvent::ClientDisconnected { client_id } => {
                 info!(client_id, "client disconnected");
+                self.session_env.remove(&client_id);
                 self.remove_client_and_resize_if_needed(client_id);
                 true
             }
@@ -3984,6 +3999,31 @@ impl HeadlessServer {
             }
             api::schema::Method::ClientWindowTitleClear(_) => {
                 let response = self.handle_client_window_title_api(msg.request.id.clone(), None);
+                let _ = msg.respond_to.send(response);
+                return true;
+            }
+            api::schema::Method::SessionEnv(_) => {
+                // Served directly from the headless server (which owns the
+                // per-client session_env store) rather than delegated to App.
+                // Returns the most recently active (foreground) client's
+                // forwarded tokens/env, if any. This is the controlled egress
+                // for plugins (e.g. usage-monitor decrypting creds).
+                let (tokens, env) = self
+                    .foreground_client_id
+                    .and_then(|cid| self.session_env.get(&cid))
+                    .cloned()
+                    .unwrap_or_default();
+                let response = serde_json::to_string(&api::schema::SuccessResponse {
+                    id: msg.request.id.clone(),
+                    result: api::schema::ResponseResult::SessionEnv {
+                        tokens: tokens
+                            .into_iter()
+                            .map(|(k, v)| (k, v.expose().to_string()))
+                            .collect(),
+                        env,
+                    },
+                })
+                .unwrap_or_else(|_| "{}".to_string());
                 let _ = msg.respond_to.send(response);
                 return true;
             }
@@ -5749,6 +5789,7 @@ mod tests {
             terminal_attach_owners: HashMap::new(),
             pending_alt_screen_reads: Vec::new(),
             deferred_alt_screen_reads: Vec::new(),
+            session_env: HashMap::new(),
             next_activity_stamp: 1,
             headless_size,
             effective_size: headless_size,

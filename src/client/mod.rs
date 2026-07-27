@@ -2516,6 +2516,13 @@ fn do_handshake(
                 return Err(ClientError::HandshakeRejected { version, error });
             }
             info!(version, ?encoding, "handshake succeeded");
+            // Forward session-scoped tokens/env (e.g. `--token` secrets) to
+            // the server immediately after the handshake, so the server holds
+            // them for the plugin lifetime of this connection. Best-effort: a
+            // send failure here never aborts the session.
+            if let Some(message) = forward_session_env_message() {
+                let _ = protocol::write_message(stream, &message);
+            }
             Ok(encoding)
         }
         _ => Err(ClientError::Protocol(protocol::FramingError::Io(
@@ -2590,6 +2597,51 @@ fn build_hello_message(
         keybindings,
         launch_mode,
     }
+/// Builds the `SessionEnv` message from env vars injected by the remote
+/// launcher (`HERDR_SESSION_TOKENS`, `HERDR_SESSION_ENV`), each holding
+/// newline-separated `NAME=VALUE` lines. Returns `None` when neither var is
+/// set or both parse to empty (plain local sessions forward nothing). The
+/// launcher-injected vars are scrubbed from this process right after reading
+/// so the secrets never linger for descendant processes.
+fn forward_session_env_message() -> Option<ClientMessage> {
+    fn parse_kv_lines(raw: &str) -> Vec<(String, String)> {
+        raw.split('\n')
+            .filter_map(|line| {
+                let line = line.trim_end_matches('\r');
+                if line.is_empty() || line.starts_with('#') {
+                    return None;
+                }
+                let (k, v) = line.split_once('=')?;
+                if k.is_empty() {
+                    None
+                } else {
+                    Some((k.to_string(), v.to_string()))
+                }
+            })
+            .collect()
+    }
+
+    let tokens_raw = std::env::var("HERDR_SESSION_TOKENS").ok();
+    let env_raw = std::env::var("HERDR_SESSION_ENV").ok();
+    if tokens_raw.is_none() && env_raw.is_none() {
+        return None;
+    }
+    // Scrub so the launcher-injected secrets never leak to descendants.
+    std::env::remove_var("HERDR_SESSION_TOKENS");
+    std::env::remove_var("HERDR_SESSION_ENV");
+
+    let tokens = tokens_raw
+        .as_deref()
+        .map(parse_kv_lines)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(k, v)| (k, crate::protocol::SecretString::new(v)))
+        .collect::<Vec<_>>();
+    let env = env_raw.as_deref().map(parse_kv_lines).unwrap_or_default();
+    if tokens.is_empty() && env.is_empty() {
+        return None;
+    }
+    Some(ClientMessage::SessionEnv { tokens, env })
 }
 
 // ---------------------------------------------------------------------------

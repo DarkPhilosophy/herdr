@@ -11,6 +11,7 @@ pub(super) fn run_api_command(args: &[String]) -> std::io::Result<i32> {
     match subcommand {
         "schema" => api_schema(&args[1..]),
         "snapshot" => api_snapshot(&args[1..]),
+        "session-env" => api_session_env(&args[1..]),
         "help" | "--help" | "-h" => {
             print_api_help();
             Ok(0)
@@ -115,4 +116,42 @@ mod tests {
         assert!(text.contains("Use `herdr api schema --json`"));
         assert!(text.len() < 400);
     }
+}
+
+/// `herdr api session-env` — returns the session-scoped tokens/env forwarded by
+/// the most recently active client (see `--token`/`--env` on `herdr --remote`).
+/// This is the controlled egress plugins use to read forwarded secrets (e.g.
+/// a decryption key) without those secrets ever touching disk or logs.
+///
+/// Default output is line-oriented for easy parsing by plugins:
+///   `TOKEN NAME=VALUE` for each forwarded secret
+///   `ENV NAME=VALUE`   for each plain env override
+/// Pass `--json` (or `--format=json`) to emit the raw envelope instead.
+fn api_session_env(args: &[String]) -> std::io::Result<i32> {
+    let response = super::send_request(&Request {
+        id: "cli:api:session-env".into(),
+        method: Method::SessionEnv(EmptyParams::default()),
+    })?;
+    let as_json = args.iter().any(|a| a == "--json" || a == "--format=json");
+    if as_json || response.get("error").is_some() {
+        return super::print_response(&response);
+    }
+    let Some(result) = response.get("result") else {
+        return super::print_response(&response);
+    };
+    if let Some(tokens) = result.get("tokens").and_then(|v| v.as_array()) {
+        for pair in tokens {
+            let key = pair.get(0).and_then(|v| v.as_str()).unwrap_or("");
+            let val = pair.get(1).and_then(|v| v.as_str()).unwrap_or("");
+            println!("TOKEN {key}={val}");
+        }
+    }
+    if let Some(env) = result.get("env").and_then(|v| v.as_array()) {
+        for pair in env {
+            let key = pair.get(0).and_then(|v| v.as_str()).unwrap_or("");
+            let val = pair.get(1).and_then(|v| v.as_str()).unwrap_or("");
+            println!("ENV {key}={val}");
+        }
+    }
+    Ok(0)
 }

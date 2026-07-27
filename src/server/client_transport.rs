@@ -376,6 +376,12 @@ pub(crate) enum ServerEvent {
         target: String,
         mode: crate::protocol::TerminalSessionMode,
     },
+    /// A client forwarded session-scoped tokens/env for its connection.
+    ClientSessionEnv {
+        client_id: u64,
+        tokens: Vec<(String, crate::protocol::SecretString)>,
+        env: Vec<(String, String)>,
+    },
     /// A direct terminal attach client requested scrollback movement.
     ClientAttachScroll {
         client_id: u64,
@@ -1072,6 +1078,13 @@ fn client_read_loop(
             ClientMessage::OpenKeybindHelp => ServerEvent::ClientOpenKeybindHelp { client_id },
             ClientMessage::Ping { nonce } => ServerEvent::ClientPing { client_id, nonce },
             ClientMessage::RequestFullFrame => ServerEvent::ClientRequestFullFrame { client_id },
+            ClientMessage::SessionEnv { tokens, env } => {
+                ServerEvent::ClientSessionEnv {
+                    client_id,
+                    tokens,
+                    env,
+                }
+            }
             ClientMessage::Hello { .. } => {
                 // Duplicate Hello — ignore.
                 continue;

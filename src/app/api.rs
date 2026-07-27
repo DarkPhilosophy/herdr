@@ -1038,6 +1038,13 @@ impl App {
                 );
             }
             Method::SessionSnapshot(_) => return self.handle_session_snapshot(request.id),
+            Method::SessionEnv(_) => {
+                return responses::encode_error(
+                    request.id,
+                    "unsupported_in_app_mode",
+                    "session.env is only handled by the headless server",
+                );
+            }
             Method::WorkspaceList(_) => return self.handle_workspace_list(request.id),
             Method::WorkspaceGet(target) => return self.handle_workspace_get(request.id, target),
             Method::WorkspaceCreate(params) => {
