@@ -1342,8 +1342,8 @@ fn agent_state_display_label(app: &AppState, entry: &AgentPanelEntry) -> String 
     };
     let elapsed = format_elapsed_short(secs);
     match display {
-        crate::config::AgentStateDisplayConfig::Elapsed => elapsed,
-        crate::config::AgentStateDisplayConfig::Both => format!("{plain} {elapsed}"),
+        crate::config::AgentStateDisplayConfig::Time => elapsed,
+        crate::config::AgentStateDisplayConfig::Both => format!("{elapsed} · {plain}"),
         crate::config::AgentStateDisplayConfig::Text => unreachable!(),
     }
 }

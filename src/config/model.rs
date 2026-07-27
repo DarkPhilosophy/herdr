@@ -165,13 +165,14 @@ pub enum HostCursorModeConfig {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum AgentStateDisplayConfig {
-    /// Plain status words: working, idle, done, blocked.
-    #[default]
+    /// Plain status words: work, block, done, idle.
     Text,
     /// Elapsed time in the current state (13s, 2m, 1h 2m), computed
     /// natively from the state transition timestamp.
-    Elapsed,
-    /// Status word plus elapsed time (working 2m, blocked 10s).
+    #[serde(alias = "elapsed")]
+    Time,
+    /// Elapsed time plus status word (11m 0s · work, 10s · block).
+    #[default]
     Both,
 }
 
@@ -939,7 +940,7 @@ pub struct UiConfig {
     pub agent_panel_scope: AgentPanelScopeConfig,
     /// Agent status indicator style.
     pub status_indicators: StatusIndicatorStyle,
-    /// What the agent panel state text shows: text, elapsed, or both.
+    /// What the agent panel state text shows: text, time, or both. Default: both.
     pub agent_state_display: AgentStateDisplayConfig,
     /// Accent color for highlights, borders, and navigation UI.
     /// Accepts hex (#89b4fa), named colors (cyan, blue), or RGB (rgb(137,180,250)).

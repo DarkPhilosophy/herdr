@@ -245,8 +245,8 @@ pub(super) fn state_icon(
 
 pub(super) fn state_label(state: AgentState, seen: bool) -> &'static str {
     match (state, seen) {
-        (AgentState::Blocked, _) => "blocked",
-        (AgentState::Working, _) => "working",
+        (AgentState::Blocked, _) => "block",
+        (AgentState::Working, _) => "work",
         (AgentState::Idle, false) => "done",
         (AgentState::Idle, true) => "idle",
         (AgentState::Unknown, _) => "idle",

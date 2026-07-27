@@ -503,7 +503,7 @@ impl App {
 
         let display_live = matches!(
             self.state.agent_state_display,
-            AgentStateDisplayConfig::Elapsed | AgentStateDisplayConfig::Both
+            AgentStateDisplayConfig::Time | AgentStateDisplayConfig::Both
         );
         let any_live = display_live
             && self.state.terminals.values().any(|terminal| {
@@ -789,7 +789,7 @@ mod tests {
 
         let (mut app, _pane_id) = test_app_with_pane();
         app.state.ensure_test_terminals();
-        app.state.agent_state_display = AgentStateDisplayConfig::Elapsed;
+        app.state.agent_state_display = AgentStateDisplayConfig::Time;
         let terminal_id = app.state.terminals.keys().next().unwrap().clone();
         app.state
             .terminals
