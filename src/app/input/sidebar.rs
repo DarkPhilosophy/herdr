@@ -1537,6 +1537,7 @@ mod tests {
                 vec![SectionRow::Spans {
                     spans: Vec::new(),
                     right: Vec::new(),
+                    wrap: false,
                 }],
                 Instant::now(),
             )
@@ -2180,6 +2181,7 @@ mod tests {
                 None,
                 vec![SectionRow::Spans {
                     spans: Vec::new(),
+                    wrap: false,
                     right: Vec::new(),
                 }],
                 Instant::now(),
@@ -2242,6 +2244,81 @@ mod tests {
         assert_eq!(minimized.sections_area.height, 3);
     }
 
+    /// The vertical divider carries one column of slack inside the sidebar so
+    /// it stays hittable. That slack must not swallow the last column of a
+    /// horizontal divider, which owns its own row.
+    #[test]
+    fn horizontal_divider_row_wins_over_sidebar_width_slack() {
+        fn app_with_live_section() -> crate::app::App {
+            let mut app = app_for_mouse_test();
+            app.state.sidebar_sections_config = vec![CustomSidebarSectionConfig {
+                id: "usage".into(),
+                title: Some("usage".into()),
+                max_rows: 3,
+                placement: SidebarSectionPlacement::BelowAgents,
+                highlight_token: None,
+            }];
+            assert_eq!(
+                app.state.sidebar_section_reports.report(
+                    "usage".into(),
+                    "test",
+                    None,
+                    None,
+                    vec![SectionRow::Spans {
+                        spans: Vec::new(),
+                        wrap: false,
+                        right: Vec::new(),
+                    }],
+                    Instant::now(),
+                ),
+                Ok(true)
+            );
+            crate::ui::compute_view(&mut app.state, Rect::new(0, 0, 106, 32));
+            app
+        }
+
+        let drag_label = |app: &crate::app::App| {
+            app.state.drag.as_ref().map(|drag| match drag.target {
+                DragTarget::SidebarDivider => "width",
+                DragTarget::SidebarSectionDivider => "spaces/agents",
+                DragTarget::SidebarSectionsDivider => "sections",
+                _ => "other",
+            })
+        };
+
+        // Each press resizes a region, so every case starts from a fresh app.
+        let mut app = app_with_live_section();
+        let sidebar = app.state.view.sidebar_rect;
+        let slack_col = sidebar.x + sidebar.width - 2;
+        let sections = crate::ui::sidebar_sections_divider_rect(&app.state, sidebar);
+        assert_eq!(sections.x + sections.width - 1, slack_col);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            slack_col,
+            sections.y,
+        ));
+        assert_eq!(drag_label(&app), Some("sections"));
+
+        let mut app = app_with_live_section();
+        let spaces = crate::ui::spaces_agents_divider_rect(&app.state, sidebar);
+        assert_eq!(spaces.x + spaces.width - 1, slack_col);
+        assert_ne!(spaces.y, sections.y);
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            slack_col,
+            spaces.y,
+        ));
+        assert_eq!(drag_label(&app), Some("spaces/agents"));
+
+        // The boundary column itself still resizes the sidebar on those rows.
+        let mut app = app_with_live_section();
+        app.handle_mouse(mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            slack_col + 1,
+            sections.y,
+        ));
+        assert_eq!(drag_label(&app), Some("width"));
+    }
     #[test]
     fn double_clicking_sidebar_divider_resets_default_width() {
         let mut app = app_for_mouse_test();

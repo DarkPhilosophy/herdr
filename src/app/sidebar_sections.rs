@@ -104,15 +104,12 @@ mod tests {
     use crate::api::schema::{SectionRow, SectionSpan};
 
     fn row(text: &str) -> SectionRow {
-        SectionRow::Spans {
-            spans: vec![SectionSpan {
-                text: text.into(),
-                color: None,
-                bold: false,
-                dim: false,
-            }],
-            right: Vec::new(),
-        }
+        SectionRow::Spans { spans: vec![SectionSpan {
+            text: text.into(),
+            color: None,
+            bold: false,
+            dim: false,
+        }], right: Vec::new(), wrap: false }
     }
 
     #[test]

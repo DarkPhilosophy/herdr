@@ -4415,6 +4415,7 @@ mod tests {
                             dim: false,
                         }],
                         right: Vec::new(),
+                        wrap: false,
                     })
                     .collect(),
                 std::time::Instant::now(),

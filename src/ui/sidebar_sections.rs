@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
     Frame,
 };
 
@@ -98,19 +98,73 @@ pub(crate) fn sidebar_sections_divider_rect(app: &AppState, area: Rect) -> Rect 
     }
 }
 
-fn configured_section_height(app: &AppState, config: &CustomSidebarSectionConfig) -> u16 {
+fn configured_section_height(
+    app: &AppState,
+    config: &CustomSidebarSectionConfig,
+    row_width: u16,
+) -> u16 {
     match config.placement {
         SidebarSectionPlacement::BelowAgents => app
             .sidebar_section_reports
             .rows(&config.id)
             .map(|rows| {
                 let (_, body) = split_header_row(config, rows);
-                (body.len().min(config.max_rows as usize) as u16)
+                let max_rows = config.max_rows as usize;
+                let capped = body.len() > max_rows;
+                let content_rows = if capped {
+                    max_rows.saturating_sub(1)
+                } else {
+                    body.len()
+                };
+                let body_h: u16 = body
+                    .iter()
+                    .take(content_rows)
+                    .map(|row| row_height(row, row_width))
+                    .fold(0u16, u16::saturating_add);
+                body_h
                     .saturating_add(1)
                     .saturating_add(u16::from(config.title.is_some()))
+                    .saturating_add(u16::from(capped))
             })
             .unwrap_or(0),
     }
+}
+
+/// Render height (in terminal lines) of a single section row at `row_width`.
+/// Wrapping spans rows grow across multiple lines; everything else is 1.
+fn row_height(row: &SectionRow, row_width: u16) -> u16 {
+    match row {
+        SectionRow::Spans {
+            spans,
+            right,
+            wrap,
+        } => {
+            if *wrap && right.is_empty() {
+                spans_wrapped_height(spans, row_width)
+            } else {
+                1
+            }
+        }
+        SectionRow::Bar { .. } => 1,
+    }
+}
+
+/// Number of terminal lines a spans cluster occupies once wrapped at the given
+/// width. Falls back to 1 for empty inputs or zero-width areas.
+fn spans_wrapped_height(spans: &[SectionSpan], row_width: u16) -> u16 {
+    if row_width == 0 {
+        return 1;
+    }
+    let line = Line::from(
+        spans
+            .iter()
+            .map(|span| Span::raw(span.text.as_str()))
+            .collect::<Vec<_>>(),
+    );
+    Paragraph::new(vec![line])
+        .wrap(Wrap { trim: false })
+        .line_count(row_width)
+        .max(1) as u16
 }
 
 fn focused_pane_token<'a>(app: &'a AppState, key: &str) -> Option<&'a str> {
@@ -133,7 +187,7 @@ fn split_header_row<'a>(
         return (None, rows);
     }
     match rows.split_first() {
-        Some((SectionRow::Spans { spans, right }, body))
+        Some((SectionRow::Spans { spans, right, .. }, body))
             if !right.is_empty() && !spans_have_content(spans) =>
         {
             (Some(right.as_slice()), body)
@@ -154,7 +208,11 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
     let requested_height = app
         .sidebar_sections_config
         .iter()
-        .map(|config| configured_section_height(app, config))
+        .map(|config| {
+            let marker_width = u16::from(config.highlight_token.is_some() && area.width > 0);
+            let row_width = area.width.saturating_sub(marker_width);
+            configured_section_height(app, config, row_width)
+        })
         .fold(0u16, u16::saturating_add);
     let height_overflow = requested_height > area.height;
     let mut remaining = area.height.saturating_sub(u16::from(height_overflow));
@@ -213,7 +271,8 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
         }
 
         for row in rows.iter().take(content_rows) {
-            if remaining == 0 {
+            let h = row_height(row, row_width);
+            if h == 0 || remaining < h {
                 break 'sections;
             }
             let highlighted = match (row, highlight_value) {
@@ -225,21 +284,21 @@ pub(super) fn render_sidebar_sections(app: &AppState, frame: &mut Frame, area: R
             if marker_width > 0 {
                 render_match_marker(
                     frame,
-                    Rect::new(area.x, row_y, marker_width, 1),
+                    Rect::new(area.x, row_y, marker_width, h),
                     highlighted,
                     &app.palette,
                 );
             }
             render_section_row(
                 frame,
-                Rect::new(area.x.saturating_add(marker_width), row_y, row_width, 1),
+                Rect::new(area.x.saturating_add(marker_width), row_y, row_width, h),
                 row,
                 bar_columns,
                 &app.palette,
             );
             represented_rows += 1;
-            row_y = row_y.saturating_add(1);
-            remaining = remaining.saturating_sub(1);
+            row_y = row_y.saturating_add(h);
+            remaining = remaining.saturating_sub(h);
         }
         if capped {
             if remaining == 0 {
@@ -318,8 +377,8 @@ fn render_section_row(
     palette: &Palette,
 ) {
     match row {
-        SectionRow::Spans { spans, right } => {
-            render_spans(frame, area, spans, right, palette);
+        SectionRow::Spans { spans, right, wrap } => {
+            render_spans(frame, area, spans, right, *wrap, palette);
         }
         SectionRow::Bar { bar } => render_bar(
             frame,
@@ -389,6 +448,7 @@ fn render_spans(
     area: Rect,
     spans: &[SectionSpan],
     right: &[SectionSpan],
+    wrap: bool,
     palette: &Palette,
 ) {
     let right_width = right
@@ -407,6 +467,16 @@ fn render_spans(
     let gap = u16::from(left_has_content && right_width > 0 && area.width > right_width);
     let left_width = area.width.saturating_sub(right_width.saturating_add(gap));
 
+    // Wrapped mode: the left cluster flows across the reserved height when
+    // there is no right cluster. Height is reserved by `row_height`.
+    if wrap && right_width == 0 && left_has_content {
+        frame.render_widget(
+            Paragraph::new(Line::from(styled_spans(spans, palette, palette.text)))
+                .wrap(Wrap { trim: false }),
+            area,
+        );
+        return;
+    }
     if left_width > 0 {
         frame.render_widget(
             Paragraph::new(Line::from(styled_spans(spans, palette, palette.text))),
@@ -880,32 +950,26 @@ mod tests {
     }
 
     fn span_row(text: &str) -> SectionRow {
-        SectionRow::Spans {
-            spans: vec![SectionSpan {
-                text: text.into(),
-                color: None,
-                bold: false,
-                dim: false,
-            }],
-            right: Vec::new(),
-        }
+        SectionRow::Spans { spans: vec![SectionSpan {
+            text: text.into(),
+            color: None,
+            bold: false,
+            dim: false,
+        }], right: Vec::new(), wrap: false }
     }
 
     fn split_span_row(left: &str, right: &str) -> SectionRow {
-        SectionRow::Spans {
-            spans: vec![SectionSpan {
-                text: left.into(),
-                color: None,
-                bold: false,
-                dim: false,
-            }],
-            right: vec![SectionSpan {
-                text: right.into(),
-                color: Some("subtext0".into()),
-                bold: false,
-                dim: true,
-            }],
-        }
+        SectionRow::Spans { spans: vec![SectionSpan {
+            text: left.into(),
+            color: None,
+            bold: false,
+            dim: false,
+        }], right: vec![SectionSpan {
+            text: right.into(),
+            color: Some("subtext0".into()),
+            bold: false,
+            dim: true,
+        }], wrap: false }
     }
 
     fn bar_row() -> SectionRow {
@@ -943,19 +1007,88 @@ mod tests {
             .to_string()
     }
 
+    fn wrapped_span_row(text: &str) -> SectionRow {
+        SectionRow::Spans {
+            spans: vec![SectionSpan {
+                text: text.into(),
+                color: None,
+                bold: false,
+                dim: false,
+            }],
+            right: Vec::new(),
+            wrap: true,
+        }
+    }
+
+    #[test]
+    fn row_height_wraps_long_spans_across_multiple_lines() {
+        let row = wrapped_span_row("No token forwarded — use --token a=KEY");
+        // 35-char message at width 10 must occupy more than one line.
+        assert!(row_height(&row, 10) > 1);
+        // Same message at width 80 fits on a single line.
+        assert_eq!(row_height(&row, 80), 1);
+        // Without wrap, the same overflow collapses to a single line.
+        assert_eq!(row_height(&span_row("No token forwarded — use --token a=KEY"), 10), 1);
+        // A non-empty right cluster forces single-line even with wrap.
+        assert_eq!(row_height(&split_span_row("x".repeat(40).as_str(), "r"), 10), 1);
+    }
+
+    #[test]
+    fn row_height_zero_width_never_pancis() {
+        assert_eq!(row_height(&wrapped_span_row("anything"), 0), 1);
+        assert_eq!(row_height(&span_row("anything"), 0), 1);
+    }
+
+    #[test]
+    fn wrapped_row_grows_section_height_and_renders_across_lines() {
+        // A long wrap:true row in a 12-wide sidebar must claim more than 1
+        // line of the rendered buffer (proves dynamic wrap end-to-end).
+        let mut app = AppState::test_new();
+        app.sidebar_sections_config = vec![config("usage", None, 18)];
+        report(
+            &mut app,
+            "usage",
+            vec![wrapped_span_row(
+                "Wrong token or key — cannot decrypt auth",
+            )],
+        );
+        let area = Rect::new(0, 0, 12, 12);
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
+        terminal
+            .draw(|frame| render_sidebar_sections(&app, frame, area))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // Row 0 is the section divider ("──"); the body row begins at row 1
+        // (no title). Its first line carries the message head.
+        assert_eq!(
+            row_text(buffer, 0, area.width).chars().next(),
+            Some('─'),
+            "row 0 should be the section divider"
+        );
+        assert!(
+            row_text(buffer, 1, area.width).starts_with("Wrong"),
+            "row 1 should be the message head"
+        );
+        // The wrapped continuation lives on row 2 — non-empty here proves the
+        // single logical row spanned multiple rendered lines instead of being
+        // clipped to one.
+        let continuation = row_text(buffer, 2, area.width);
+        assert!(
+            !continuation.is_empty(),
+            "wrap should have produced a continuation line, got empty"
+        );
+    }
+
     #[test]
     fn leading_right_only_row_hoists_onto_titled_header() {
         let mut app = AppState::test_new();
         app.sidebar_sections_config = vec![config("usage", Some("usage"), 18)];
-        let status = SectionRow::Spans {
-            spans: Vec::new(),
-            right: vec![SectionSpan {
-                text: "\u{21bb} 4m \u{b7} prefix+u".into(),
-                color: None,
-                bold: false,
-                dim: true,
-            }],
-        };
+        let status = SectionRow::Spans { spans: Vec::new(), right: vec![SectionSpan {
+            text: "\u{21bb} 4m \u{b7} prefix+u".into(),
+            color: None,
+            bold: false,
+            dim: true,
+        }], wrap: false };
         report(
             &mut app,
             "usage",
@@ -964,6 +1097,7 @@ mod tests {
                 SectionRow::Spans {
                     spans: Vec::new(),
                     right: Vec::new(),
+                    wrap: false,
                 },
                 span_row("acct row"),
                 bar_row(),
@@ -998,11 +1132,11 @@ mod tests {
 
         // Heights count body rows only; the cap compares against body length.
         assert_eq!(
-            configured_section_height(&app, &config("usage", Some("usage"), 18)),
+            configured_section_height(&app, &config("usage", Some("usage"), 18), 80),
             5
         );
         assert_eq!(
-            configured_section_height(&app, &config("usage", Some("usage"), 2)),
+            configured_section_height(&app, &config("usage", Some("usage"), 2), 80),
             4
         );
     }
@@ -1023,6 +1157,7 @@ mod tests {
                         bold: false,
                         dim: true,
                     }],
+                    wrap: false,
                 },
                 span_row("body"),
             ],
@@ -1039,7 +1174,7 @@ mod tests {
         assert!(row_text(buffer, 1, area.width).ends_with("\u{21bb} 4m"));
         assert_eq!(row_text(buffer, 2, area.width), "body");
         assert_eq!(
-            configured_section_height(&app, &config("usage", None, 18)),
+            configured_section_height(&app, &config("usage", None, 18), 80),
             3
         );
     }
@@ -2122,23 +2257,20 @@ mod tests {
     #[test]
     fn span_rows_resolve_named_and_rgb_colors_with_modifiers() {
         let app = AppState::test_new();
-        let row = SectionRow::Spans {
-            spans: vec![
-                SectionSpan {
-                    text: "A".into(),
-                    color: Some("accent".into()),
-                    bold: true,
-                    dim: false,
-                },
-                SectionSpan {
-                    text: "B".into(),
-                    color: Some("#123456".into()),
-                    bold: false,
-                    dim: true,
-                },
-            ],
-            right: Vec::new(),
-        };
+        let row = SectionRow::Spans { spans: vec![
+            SectionSpan {
+                text: "A".into(),
+                color: Some("accent".into()),
+                bold: true,
+                dim: false,
+            },
+            SectionSpan {
+                text: "B".into(),
+                color: Some("#123456".into()),
+                bold: false,
+                dim: true,
+            },
+        ], right: Vec::new(), wrap: false };
         let mut terminal = Terminal::new(TestBackend::new(2, 1)).unwrap();
         terminal
             .draw(|frame| {
@@ -2164,10 +2296,7 @@ mod tests {
     #[test]
     fn blank_spans_row_renders_an_empty_line() {
         let app = AppState::test_new();
-        let row = SectionRow::Spans {
-            spans: Vec::new(),
-            right: Vec::new(),
-        };
+        let row = SectionRow::Spans { spans: Vec::new(), right: Vec::new(), wrap: false };
         let area = Rect::new(0, 0, 8, 1);
         let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).unwrap();
         terminal

@@ -29,6 +29,12 @@ pub enum SectionRow {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         #[schemars(length(max = 8))]
         right: Vec<SectionSpan>,
+        /// When true, the left cluster wraps onto additional lines instead of
+        /// being clipped when it overflows the available row width. Ignored
+        /// when `right` is non-empty (the right cluster always stays on its
+        /// own right-aligned line). Default: false (clip on overflow).
+        #[serde(default, skip_serializing_if = "super::is_false")]
+        wrap: bool,
     },
     Bar {
         bar: SectionBar,
@@ -168,6 +174,7 @@ mod tests {
                         bold: false,
                         dim: true,
                     }],
+                    wrap: false,
                 },
                 SectionRow::Bar {
                     bar: SectionBar {
@@ -235,6 +242,7 @@ mod tests {
             params.rows,
             vec![SectionRow::Spans {
                 spans: Vec::new(),
+                wrap: false,
                 right: Vec::new(),
             }]
         );

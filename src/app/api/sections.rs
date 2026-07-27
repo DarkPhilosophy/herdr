@@ -94,10 +94,7 @@ fn normalize_section_rows(
 
     rows.into_iter()
         .map(|row| match row {
-            SectionRow::Spans { spans, right } => Ok(SectionRow::Spans {
-                spans: normalize_section_spans(spans)?,
-                right: normalize_section_spans(right)?,
-            }),
+            SectionRow::Spans { spans, right, wrap } => Ok(SectionRow::Spans { spans: normalize_section_spans(spans)?, right: normalize_section_spans(right)?, wrap }),
             SectionRow::Bar { bar } => Ok(SectionRow::Bar {
                 bar: SectionBar {
                     fraction: bar.fraction.clamp(0.0, 1.0),
@@ -248,15 +245,12 @@ mod tests {
     }
 
     fn span_row(text: &str) -> SectionRow {
-        SectionRow::Spans {
-            spans: vec![SectionSpan {
-                text: text.into(),
-                color: None,
-                bold: false,
-                dim: false,
-            }],
-            right: Vec::new(),
-        }
+        SectionRow::Spans { spans: vec![SectionSpan {
+            text: text.into(),
+            color: None,
+            bold: false,
+            dim: false,
+        }], right: Vec::new(), wrap: false }
     }
 
     fn params(section_id: &str, rows: Vec<SectionRow>) -> SidebarReportSectionParams {
@@ -324,6 +318,7 @@ mod tests {
                     )
                     .collect(),
                     right: Vec::new(),
+                    wrap: false,
                 }],
             ),
         );
@@ -346,6 +341,7 @@ mod tests {
                         MAX_SECTION_SPANS + 1,
                     )
                     .collect(),
+                    wrap: false,
                 }],
             ),
         );
@@ -364,6 +360,7 @@ mod tests {
                         dim: false,
                     }],
                     right: Vec::new(),
+                    wrap: false,
                 }],
             ),
         );
@@ -464,10 +461,7 @@ mod tests {
     #[test]
     fn report_section_accepts_blank_spans_row() {
         let mut app = test_app();
-        let blank = SectionRow::Spans {
-            spans: Vec::new(),
-            right: Vec::new(),
-        };
+        let blank = SectionRow::Spans { spans: Vec::new(), right: Vec::new(), wrap: false };
         let response =
             app.handle_sidebar_report_section("blank".into(), params("blank", vec![blank.clone()]));
         let success: SuccessResponse = serde_json::from_str(&response).unwrap();
@@ -651,6 +645,7 @@ mod tests {
                             bold: false,
                             dim: true,
                         }],
+                        wrap: false,
                     },
                     SectionRow::Bar {
                         bar: SectionBar {
@@ -706,6 +701,7 @@ mod tests {
                             bold: false,
                             dim: true,
                         }],
+                        wrap: false,
                     },
                     SectionRow::Bar {
                         bar: SectionBar {
