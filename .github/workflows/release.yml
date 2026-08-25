@@ -81,7 +81,8 @@ jobs:
         run: |
           CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
           TAG_VERSION="${GITHUB_REF_NAME#v}"
-          # herdr-mx tags (v0.6.10-mx.1) build the upstream base version.
+          # Downstream tags (v0.8.2-omhdr.1 or v0.8.2-mx.1) build the upstream base version.
+          TAG_VERSION="${TAG_VERSION%%-omhdr.*}"
           TAG_VERSION="${TAG_VERSION%%-mx.*}"
           if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
             echo "error: tag $GITHUB_REF_NAME doesn't match Cargo.toml version $CARGO_VERSION"
@@ -149,8 +150,12 @@ jobs:
         shell: bash
         run: rm -rf .zig-cache vendor/libghostty-vt/.zig-cache vendor/libghostty-vt/zig-out
 
-      # herdr-mx: tags look like v0.6.10-mx.1; stamp the build channel so
-      # `herdr --version` reports the mx identity and self-update stays gated.
+      - name: Set OMHDR build identity
+        if: contains(github.ref_name, '-omhdr.')
+        run: |
+          echo "HERDR_BUILD_CHANNEL=omhdr" >> "$GITHUB_ENV"
+          echo "HERDR_BUILD_ID=${GITHUB_REF_NAME##*-omhdr.}" >> "$GITHUB_ENV"
+
       - name: Set herdr-mx build identity
         if: contains(github.ref_name, '-mx.')
         run: |
@@ -317,6 +322,7 @@ jobs:
 
   close-released-issues:
     needs: release
+    if: ${{ !contains(github.ref_name, '-mx.') && !contains(github.ref_name, '-omhdr.') }}
     runs-on: ubuntu-latest
     continue-on-error: true
     permissions:
@@ -451,11 +457,48 @@ jobs:
             fi
           done
 
+  update-omhdr-manifest:
+    needs: release
+    if: ${{ contains(github.ref_name, '-omhdr.') }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: omhdr-manifest
+      cancel-in-progress: false
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: omhdr/mobile-client
+          fetch-depth: 0
+
+      - name: Update OMHDR release manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          RELEASE_PROTOCOL=$(git show "${GITHUB_REF_NAME}:src/protocol/wire.rs" | python3 -c 'import re, sys; match = re.search(r"pub const PROTOCOL_VERSION: u32 = (\d+);", sys.stdin.read()); sys.exit(1) if match is None else print(match.group(1))')
+          python3 scripts/changelog.py sync-latest-json \
+            --version "$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --output website/latest.json \
+            --protocol "$RELEASE_PROTOCOL"
+
+      - name: Commit OMHDR release manifest
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add website/latest.json
+          git diff --cached --quiet || git commit -m "docs(omhdr): update release manifest for v$VERSION"
+          git pull --rebase origin omhdr/mobile-client
+          git push origin omhdr/mobile-client
+
   update-latest-json:
     needs: release
-    # herdr-mx releases must not rewrite the upstream website manifest or push
-    # to the master mirror branch.
-    if: ${{ !contains(github.ref_name, '-mx.') }}
+    # Downstream manifests are maintained on their own branches.
+    if: ${{ !contains(github.ref_name, '-mx.') && !contains(github.ref_name, '-omhdr.') }}
     runs-on: ubuntu-latest
     concurrency:
       group: docs-publish-master
