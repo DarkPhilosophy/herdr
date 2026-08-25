@@ -1,13 +1,12 @@
-name: Preview (mx)
+name: Preview (OMHDR)
 
-# herdr-mx preview channel: every push to `mx` publishes a fat-bundle
-# prerelease tagged mx-preview-<date>-<sha>. Stable releases (v*-mx.N tags,
-# which feed the brew `herdr-mx` formula) are cut manually on request.
+# OMHDR preview channel: every push to `omhdr/mobile-client` publishes a
+# multi-platform prerelease tagged `omhdr-preview-<date>-<sha>`.
 on:
   workflow_dispatch:
   push:
     branches:
-      - mx
+      - omhdr/mobile-client
 
 permissions:
   contents: read
@@ -20,7 +19,7 @@ env:
   RUST_TOOLCHAIN_VERSION: 1.96.1
 
 concurrency:
-  group: preview-mx
+  group: preview-omhdr
   cancel-in-progress: true
 
 jobs:
@@ -54,7 +53,7 @@ jobs:
           {
             echo "short_sha=$short_sha"
             echo "build_id=$build_id"
-            echo "tag=mx-preview-$build_id"
+            echo "tag=omhdr-preview-$build_id"
             echo "base_version=$base_version"
           } >> "$GITHUB_OUTPUT"
 
@@ -86,7 +85,7 @@ jobs:
     env:
       LIBGHOSTTY_VT_OPTIMIZE: ReleaseFast
       LIBGHOSTTY_VT_SIMD: 'true'
-      HERDR_BUILD_CHANNEL: mx
+      HERDR_BUILD_CHANNEL: omhdr
       HERDR_BUILD_ID: preview-${{ needs.preflight.outputs.build_id }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
@@ -143,10 +142,7 @@ jobs:
     permissions:
       contents: write
     env:
-      # Deploy key with write access to 2lab-ai/homebrew-tap (repo-scoped; NOT a personal
-      # token). Present -> the step below pushes the rendered preview formula immediately
-      # after publishing. Absent -> the step no-ops and the tap's 6h cron catches up.
-      TAP_PUSH_KEY: ${{ secrets.TAP_PUSH_KEY }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
@@ -159,7 +155,7 @@ jobs:
       - name: Pack fat bundles
         run: |
           set -euo pipefail
-          VERSION="${{ needs.preflight.outputs.base_version }}-mx.preview-${{ needs.preflight.outputs.build_id }}"
+          VERSION="${{ needs.preflight.outputs.base_version }}-omhdr.preview-${{ needs.preflight.outputs.build_id }}"
           COMMIT="${GITHUB_SHA::7}"
           PACKER=herdr-linux-x86_64/herdr-linux-x86_64
           chmod +x "$PACKER"
@@ -185,15 +181,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          prev="$(git tag -l 'mx-preview-*' --sort=-creatordate | head -1 || true)"
+          prev="$(git tag -l 'omhdr-preview-*' --sort=-creatordate | head -1 || true)"
           {
-            echo "herdr-mx preview build \`${{ needs.preflight.outputs.build_id }}\` (commit ${GITHUB_SHA::7})."
+            echo "OMHDR preview build \`${{ needs.preflight.outputs.build_id }}\` (commit ${GITHUB_SHA::7})."
             echo
-            echo "Fat-bundle binaries; installs as \`herdr\`. Install with:"
+            echo "Multi-platform bundles; installs as \`herdr\` for compatibility."
             echo
-            echo '```'
-            echo "brew install 2lab-ai/tap/herdr-mx-preview"
-            echo '```'
+            echo "Download from this release or run \`herdr update\` from an existing OMHDR build."
             echo
             if [ -n "$prev" ]; then
               echo "Changes since \`$prev\`:"
@@ -209,7 +203,7 @@ jobs:
         uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
-          name: mx preview ${{ needs.preflight.outputs.build_id }}
+          name: OMHDR preview ${{ needs.preflight.outputs.build_id }}
           body_path: PREVIEW_NOTES.md
           prerelease: true
           make_latest: false
@@ -221,59 +215,14 @@ jobs:
             fat/herdr-macos-aarch64
 
 
-      - name: Bump Homebrew tap to this preview
-        # Event-driven tap update: render Formula/herdr-mx-preview.rb from the fat
-        # bundles just published (same sha256s brew will download) and push it to the
-        # tap over the deploy key, so `brew upgrade herdr-mx-preview` sees this build
-        # immediately instead of waiting on the tap's 6h cron (which stays as backstop
-        # and no-ops on "already at TAG").
-        if: ${{ env.TAP_PUSH_KEY != '' }}
-        run: |
-          set -euo pipefail
-          TAG="${{ needs.preflight.outputs.tag }}"
-          BUILD_ID="${{ needs.preflight.outputs.build_id }}"
-          VERSION="$(echo "$BUILD_ID" | awk -F- '{print $1"."$2"."$3"."$4}')"
-
-          mkdir -p ~/.ssh
-          ssh-keyscan github.com >> ~/.ssh/known_hosts 2>/dev/null
-          eval "$(ssh-agent -s)" >/dev/null
-          ssh-add - <<< "$TAP_PUSH_KEY"
-
-          git clone --depth 1 git@github.com:2lab-ai/homebrew-tap.git tap-bump
-
-          declare -A SHAS
-          for name in herdr-macos-aarch64 herdr-macos-x86_64 herdr-linux-aarch64 herdr-linux-x86_64; do
-            SHAS[$name]=$(sha256sum "fat/$name" | cut -d' ' -f1)
-          done
-          sed -e "s/@VERSION@/$VERSION/g" \
-              -e "s/@TAG@/$TAG/g" \
-              -e "s/@SHA_MACOS_AARCH64@/${SHAS[herdr-macos-aarch64]}/" \
-              -e "s/@SHA_MACOS_X86_64@/${SHAS[herdr-macos-x86_64]}/" \
-              -e "s/@SHA_LINUX_AARCH64@/${SHAS[herdr-linux-aarch64]}/" \
-              -e "s/@SHA_LINUX_X86_64@/${SHAS[herdr-linux-x86_64]}/" \
-              tap-bump/Formula/herdr-mx-preview.rb.tmpl > tap-bump/Formula/herdr-mx-preview.rb
-          ruby -c tap-bump/Formula/herdr-mx-preview.rb
-
-          cd tap-bump
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Formula/herdr-mx-preview.rb
-          git diff --cached --quiet && { echo "tap already current"; exit 0; }
-          git commit -m "herdr-mx-preview $TAG"
-          # Commit before pulling (an unstaged render breaks --rebase), then rebase over
-          # anything the cron/other repos pushed meanwhile.
-          git pull --rebase
-          git push
-          echo "tap bumped to $TAG"
-
-      - name: Prune old mx previews (keep 3)
+      - name: Prune old OMHDR previews (keep 3)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           gh release list --repo "$GITHUB_REPOSITORY" --limit 100 \
             --json tagName,isPrerelease \
-            --jq '.[] | select(.isPrerelease and (.tagName | startswith("mx-preview-"))) | .tagName' \
+            --jq '.[] | select(.isPrerelease and (.tagName | startswith("omhdr-preview-"))) | .tagName' \
             | tail -n +4 \
             | while read -r tag; do
                 echo "pruning $tag"

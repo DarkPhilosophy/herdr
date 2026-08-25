@@ -638,7 +638,7 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
         platform::begin_cli_output();
-        println!("herdr — terminal workspace manager for AI coding agents");
+        println!("OMHDR (Oh My Herdr) — terminal workspace manager for AI coding agents");
         println!();
         println!("Usage: herdr [options]");
         println!("       herdr --session <name> [options]");
@@ -756,7 +756,7 @@ fn main() -> io::Result<()> {
         println!("Config: {}", config::config_path().display());
         println!("Logs:   {}", logging::help_log_paths_summary());
         println!("Env:    HERDR_CONFIG_PATH overrides config file path");
-        println!("Home:   https://herdr.dev");
+        println!("Home:   https://github.com/DarkPhilosophy/herdr/tree/omhdr/mobile-client");
         println!();
         println!("{}", cli::AGENT_HELP_FOOTER);
         return Ok(());
@@ -764,7 +764,7 @@ fn main() -> io::Result<()> {
 
     if args.iter().any(|a| a == "--version" || a == "-V") {
         platform::begin_cli_output();
-        println!("herdr {}", crate::build_info::version());
+        println!("OMHDR {} (herdr-compatible)", crate::build_info::version());
         return Ok(());
     }
 
