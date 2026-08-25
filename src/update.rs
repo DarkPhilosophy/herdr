@@ -2376,6 +2376,18 @@ mod tests {
         LOCK.get_or_init(|| Mutex::new(()))
     }
 
+    #[test]
+    fn omhdr_update_channels_use_darkphilosophy_manifests() {
+        assert_eq!(
+            STABLE_UPDATE_MANIFEST_URL,
+            "https://raw.githubusercontent.com/DarkPhilosophy/herdr/omhdr/mobile-client/website/latest.json"
+        );
+        assert_eq!(
+            PREVIEW_UPDATE_MANIFEST_URL,
+            "https://raw.githubusercontent.com/DarkPhilosophy/herdr/omhdr/mobile-client/website/preview.json"
+        );
+    }
+
     fn unique_test_socket_path(name: &str) -> std::path::PathBuf {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
