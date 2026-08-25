@@ -2,7 +2,7 @@
 // managed by herdr; reinstalling or updating the integration overwrites this file.
 // add custom hooks/plugins beside this file instead of editing it.
 // HERDR_INTEGRATION_ID=omp
-// HERDR_INTEGRATION_VERSION=8
+// HERDR_INTEGRATION_VERSION=9
 // LOCAL PATCH (cubix): daemon-aware pane identity. Under `omp --daemon`
 // this extension runs in the shared daemon process, whose env belongs to
 // whichever pane spawned the daemon first. Pane identity is resolved
@@ -295,8 +295,6 @@ export default function (pi) {
 
   let agentActive = false;
   let retryHoldActive = false;
-  let failureBlocked = false;
-  let failureMessage: string | undefined;
   let blockedCount = 0;
   let blockedMessage: string | undefined;
   let lastState: AgentState | undefined;
@@ -491,16 +489,11 @@ export default function (pi) {
 
   function clearFailureState() {
     retryHoldActive = false;
-    failureBlocked = false;
-    failureMessage = undefined;
   }
 
   function desiredState() {
     if (blockedCount > 0) {
       return { state: "blocked" as const, message: blockedMessage };
-    }
-    if (failureBlocked) {
-      return { state: "blocked" as const, message: failureMessage };
     }
     if (agentActive || retryHoldActive) {
       return { state: "working" as const, message: undefined };
@@ -528,17 +521,37 @@ export default function (pi) {
     idleTimer.unref?.();
   }
 
-  function holdForRetry(message: string) {
+  function scheduleStartupReconciliation(ctx: { isIdle?: () => boolean }) {
+    clearTimer(idleTimer);
+    let checksRemaining = 2;
+    const reconcile = () => {
+      idleTimer = undefined;
+      if (!rootSession || !agentActive) {
+        return;
+      }
+      if (ctx?.isIdle?.() === true) {
+        agentActive = false;
+        publishState();
+        return;
+      }
+      checksRemaining -= 1;
+      if (checksRemaining === 0) {
+        return;
+      }
+      idleTimer = setTimeout(reconcile, identity?.retryGraceMs ?? 2500);
+      idleTimer.unref?.();
+    };
+    idleTimer = setTimeout(reconcile, identity?.idleDebounceMs ?? 250);
+    idleTimer.unref?.();
+  }
+  function holdForRetry() {
     clearPendingTimers();
     retryHoldActive = true;
-    failureBlocked = false;
-    failureMessage = message;
     publishState();
 
     retryTimer = setTimeout(() => {
       retryTimer = undefined;
       retryHoldActive = false;
-      failureBlocked = true;
       publishState();
     }, identity?.retryGraceMs ?? 2500);
     retryTimer.unref?.();
@@ -672,7 +685,7 @@ export default function (pi) {
 
     const retryableMessage = retryableErrorMessage(event);
     if (retryableMessage) {
-      holdForRetry(retryableMessage);
+      holdForRetry();
       return;
     }
 

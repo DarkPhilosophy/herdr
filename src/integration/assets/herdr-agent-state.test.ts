@@ -9,6 +9,7 @@ const originalCreateConnection = net.createConnection;
 const originalEnvironment = {
   HERDR_ENV: process.env.HERDR_ENV,
   HERDR_OMP_IDLE_DEBOUNCE_MS: process.env.HERDR_OMP_IDLE_DEBOUNCE_MS,
+  HERDR_OMP_RETRY_GRACE_MS: process.env.HERDR_OMP_RETRY_GRACE_MS,
   HERDR_PANE_ID: process.env.HERDR_PANE_ID,
   HERDR_SOCKET_PATH: process.env.HERDR_SOCKET_PATH,
 };
@@ -498,6 +499,107 @@ test("Oh My Pi retries working before a queued idle state", async () => {
   expect(requestState(attemptedRequests[2])).toBe("idle");
 });
 
+test("Oh My Pi returns quota-exhausted runs to idle instead of blocked", async () => {
+  const requests = await startRecordingServer("omp-quota-idle");
+  process.env.HERDR_OMP_RETRY_GRACE_MS = "10";
+  process.env.HERDR_OMP_IDLE_DEBOUNCE_MS = "5000";
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  install(pi);
+
+  const context = {
+    hasUI: true,
+    isIdle: () => false,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => undefined,
+    },
+  };
+  handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+
+  handlers.get("agent_end")?.(
+    {
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "error",
+          errorMessage: "Claude rate limit reached",
+        },
+      ],
+    },
+    context,
+  );
+
+  await waitFor(() => requestStates(requests).length === 2);
+  expect(requestStates(requests)).toEqual(["working", "idle"]);
+});
+
+test("Oh My Pi publishes pending idle state during session shutdown", async () => {
+  const requests = await startRecordingServer("omp-shutdown-idle");
+  process.env.HERDR_OMP_IDLE_DEBOUNCE_MS = "1000";
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  install(pi);
+
+  const context = {
+    hasUI: true,
+    isIdle: () => false,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => undefined,
+    },
+  };
+  handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+
+  handlers.get("agent_end")?.({ messages: [] }, context);
+  handlers.get("session_shutdown")?.({}, context);
+
+  await waitFor(() => requestStates(requests).length === 2);
+  expect(requestStates(requests)).toEqual(["working", "idle"]);
+});
+
+test("Oh My Pi corrects transient startup working state after becoming idle", async () => {
+  const requests = await startRecordingServer("omp-startup-idle");
+  process.env.HERDR_OMP_IDLE_DEBOUNCE_MS = "10";
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./omp/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = false;
+  const context = {
+    hasUI: true,
+    isIdle: () => idle,
+    sessionManager: {
+      getSessionFile: () => undefined,
+      getSessionId: () => undefined,
+    },
+  };
+  handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+
+  idle = true;
+  await waitFor(() => requestStates(requests).length === 2);
+  expect(requestStates(requests)).toEqual(["working", "idle"]);
+});
+
+test("Pi corrects transient startup working state after becoming idle", async () => {
+  const requests = await startRecordingServer("pi-startup-idle");
+  const { handlers, pi } = createExtensionHarness();
+  const { default: install } = await importFresh("./pi/herdr-agent-state.ts");
+  install(pi);
+
+  let idle = false;
+  const context = piContext(() => idle);
+  await handlers.get("session_start")?.({ reason: "startup" }, context);
+  await waitFor(() => requestStates(requests).length === 1);
+  expect(requestStates(requests)).toEqual(["working"]);
+
+  idle = true;
+  await waitFor(() => requestStates(requests).length === 2);
+  expect(requestStates(requests)).toEqual(["working", "idle"]);
+});
 test("Pi retries working state after an unanswered socket attempt", async () => {
   const { attemptedRequests, deliveredRequests, connectionCount } =
     await startDroppedFirstResponseServer("pi-retry");
