@@ -1,23 +1,22 @@
-# herdr-mx
-
+# OMHDR
 
 <p align="center">
-  <img src="assets/logo.png" alt="herdr-mx" width="100" />
+  <img src="assets/logo.png" alt="OMHDR — Oh My Herdr" width="100" />
 </p>
 
 <p align="center">
-  <b>herdr, multiplexed further.</b> one terminal, every machine.
+  <b>Oh My Herdr.</b> One terminal, every machine.
 </p>
 
 <p align="center">
-  <a href="https://github.com/ogulcancelik/herdr">upstream herdr</a> · <a href="#install">install</a> · <a href="DIVERGENCE.md">what's different</a> · <a href="#quick-start">quick start</a> · <a href="#supported-agents">supported agents</a> · <a href="https://herdr.dev/docs/configuration/">configuration</a> · <a href="https://herdr.dev/docs/socket-api/">socket api</a>
+  <a href="https://github.com/ogulcancelik/herdr">upstream Herdr</a> · <a href="#install">install</a> · <a href="DIVERGENCE.md">what's different</a> · <a href="#quick-start">quick start</a> · <a href="#supported-agents">supported agents</a> · <a href="https://herdr.dev/docs/configuration/">configuration</a> · <a href="https://herdr.dev/docs/socket-api/">socket API</a>
 </p>
 
 ---
 
-**herdr-mx** is a friendly downstream distribution of [herdr](https://github.com/ogulcancelik/herdr) by [@ogulcancelik](https://github.com/ogulcancelik). it tracks every upstream release and adds one big thing: a full **multi-remote client** — attach to herdr servers on all your machines at once, one sidebar, one keymap, zero ssh tabs. all credit for herdr itself goes upstream; herdr-mx exists so you can run multi-remote *today*, and retires the day it lands upstream.
+**OMHDR (Oh My Herdr)** is DarkPhilosophy's downstream Herdr distribution. It combines upstream [Herdr](https://github.com/ogulcancelik/herdr) by [@ogulcancelik](https://github.com/ogulcancelik) with the multi-remote and mobile-client work from [herdr-mx](https://github.com/2lab-ai/herdr-mx). All credit for Herdr and herdr-mx remains with their respective authors.
 
-everything herdr-mx adds is documented in [DIVERGENCE.md](DIVERGENCE.md). report herdr-mx issues [here](https://github.com/2lab-ai/herdr-mx/issues), **not** upstream — if `herdr --version` prints a `-mx.` version, it's this distribution.
+OMHDR preserves the MX wire identity and the `herdr` executable for compatibility with existing servers, clients, integrations, and configuration. Product releases and updates come from [DarkPhilosophy/herdr](https://github.com/DarkPhilosophy/herdr), not upstream Herdr or herdr-mx.
 
 ---
 
@@ -31,17 +30,7 @@ workspaces, tabs, panes. mouse-native: click, drag, split. every agent at a glan
 
 ## install
 
-```bash
-brew install 2lab-ai/tap/herdr-mx
-```
-
-or install with mise (straight from GitHub releases):
-
-```bash
-mise use -g "ubi:2lab-ai/herdr-mx[exe=herdr]"
-```
-
-or download the Linux/macOS binary from [releases](https://github.com/2lab-ai/herdr-mx/releases). the binary installs as `herdr` — a drop-in replacement for upstream herdr, so don't install both. native Windows builds are not available in herdr-mx yet (tracked in [#63](https://github.com/2lab-ai/herdr-mx/issues/63)).
+Download the Linux/macOS binary from [OMHDR releases](https://github.com/DarkPhilosophy/herdr/releases). The executable remains `herdr` so OMHDR is a drop-in replacement for existing Herdr and herdr-mx installations; do not install multiple distributions at the same path.
 
 ## quick start
 
@@ -71,14 +60,13 @@ Press `ctrl+b q` to detach the client. The server and pane processes keep runnin
 
 ## update
 
-herdr-mx updates ship through your package manager, not the built-in updater:
+OMHDR's built-in updater reads release manifests from the `omhdr/mobile-client` branch of [DarkPhilosophy/herdr](https://github.com/DarkPhilosophy/herdr):
 
 ```bash
-brew upgrade herdr-mx        # Homebrew
-mise upgrade                 # mise
+herdr update
 ```
 
-or install a newer binary from [releases](https://github.com/2lab-ai/herdr-mx/releases). `herdr update` and the herdr.dev update channels are intentionally disabled in mx builds — they would replace this binary with a stock herdr that lacks the multi-remote client. After updating, use the same stop-and-run-again flow as upstream if a session is still running the old server.
+The updater retains Herdr's mandatory SHA-256 verification before replacing the installed executable. A running server continues using its existing binary until it is stopped or handed off.
 
 ## how it compares
 
