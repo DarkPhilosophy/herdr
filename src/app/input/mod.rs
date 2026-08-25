@@ -26,15 +26,6 @@ enum WheelRouting {
 const WORKSPACE_DRAG_THRESHOLD: u16 = 1;
 const TAB_DRAG_THRESHOLD: u16 = 1;
 
-fn modified_url_click_modifier() -> KeyModifiers {
-    KeyModifiers::CONTROL
-}
-
-#[cfg(test)]
-#[test]
-fn modified_url_click_modifier_matches_terminal_mouse_reporting() {
-    assert_eq!(modified_url_click_modifier(), KeyModifiers::CONTROL);
-}
 
 mod clipboard;
 mod copy_mode;
@@ -616,7 +607,7 @@ impl App {
     ) -> bool {
         if self.state.mode != Mode::Terminal
             || !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left))
-            || !mouse.modifiers.contains(modified_url_click_modifier())
+            || !mouse.modifiers.contains(self.state.url_click_modifier)
         {
             return false;
         }

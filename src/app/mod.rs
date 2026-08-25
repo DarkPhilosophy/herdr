@@ -709,6 +709,7 @@ impl App {
             mouse_capture: config.ui.mouse_capture,
             copy_on_select: config.ui.copy_on_select,
             right_click_passthrough_modifiers: config.ui.right_click_passthrough_modifiers(),
+            url_click_modifier: config.ui.url_click_modifiers(),
             right_click_passthrough: None,
             redraw_on_focus_gained: config.ui.redraw_on_focus_gained,
             mouse_scroll_lines: config.ui.mouse_scroll_lines(),
@@ -1633,6 +1634,7 @@ impl App {
                 self.state.mouse_scroll_lines = config.ui.mouse_scroll_lines();
                 self.state.right_click_passthrough_modifiers =
                     config.ui.right_click_passthrough_modifiers();
+                self.state.url_click_modifier = config.ui.url_click_modifiers();
                 self.state.confirm_close = config.ui.confirm_close;
                 self.state.prompt_new_tab_name = config.ui.prompt_new_tab_name;
                 self.state.prompt_new_workspace_name = config.ui.prompt_new_workspace_name;

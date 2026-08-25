@@ -27,8 +27,8 @@ pub use self::{
         NewTerminalCwdConfig, ShellModeConfig, SidebarAgentField, SidebarAgentsConfig,
         SidebarCollapsedModeConfig, SidebarColorPreset, SidebarHostConfig, SidebarItem,
         SidebarSpaceField, SidebarSpacesConfig, StatusIndicatorStyle, TabBarPositionConfig,
-        ToastClipboardPosition, ToastConfig,
-        ToastDelivery, ToastHerdrPosition, UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
+        ToastClipboardPosition, ToastConfig, ToastDelivery, ToastHerdrPosition,
+        UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
         AgentSidebarToken, AgentsSidebarConfig, CustomSidebarSectionConfig, SidebarConfig,

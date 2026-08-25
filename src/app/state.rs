@@ -2195,6 +2195,8 @@ pub struct AppState {
     pub mouse_capture: bool,
     pub copy_on_select: bool,
     pub right_click_passthrough_modifiers: Option<KeyModifiers>,
+    /// Modifier required for a left click to open pane URLs. Empty = plain click.
+    pub url_click_modifier: KeyModifiers,
     pub right_click_passthrough: Option<RightClickPassthroughGesture>,
     pub redraw_on_focus_gained: bool,
     pub mouse_scroll_lines: usize,
@@ -2631,6 +2633,7 @@ impl AppState {
             mouse_capture: true,
             copy_on_select: true,
             right_click_passthrough_modifiers: None,
+            url_click_modifier: KeyModifiers::CONTROL,
             right_click_passthrough: None,
             redraw_on_focus_gained: true,
             mouse_scroll_lines: crate::config::DEFAULT_MOUSE_SCROLL_LINES,

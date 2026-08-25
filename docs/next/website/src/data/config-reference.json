@@ -703,7 +703,7 @@
         {
           "key": "ui.mouse_scroll_lines",
           "type": "integer",
-          "default": "3",
+          "default": "1",
           "description": "Lines to scroll per mouse wheel notch."
         },
         {
