@@ -1604,6 +1604,13 @@ impl ClientCompositor {
         if host_width <= 1 {
             return 0;
         }
+        // The mobile layout owns the whole screen. Below the threshold the sidebar is suppressed
+        // entirely so the device's real width reaches the content and the server-side mobile view
+        // (`is_mobile_width`) sees the same width the device reports instead of `width - sidebar`.
+        // render, hit_test and content_size all read this ONE value, so they stay in lockstep.
+        if host_width <= crate::config::DEFAULT_MOBILE_WIDTH_THRESHOLD {
+            return 0;
+        }
         // #9: interpolate between the full width and the mini width across `collapse_progress`, so
         // the sidebar slides on collapse/expand. At rest (progress 0.0) this is exactly the old
         // `sidebar_width.min(host-1)`. Both render and hit-test read this ONE value, so their
@@ -2847,13 +2854,18 @@ fn agent_state_from_status(status: &str) -> (AgentState, bool) {
     }
 }
 
-/// Composited clients redraw when supervisor data changes. Do not run a second periodic sidebar
-/// animation clock: repainting the full composited terminal for a spinner or host gradient causes
-/// visible whole-screen flicker. Width collapse/expand keeps its separate bounded animation clock.
+/// The sidebar animation clock: true while a working agent's spinner, an animated host banner, or
+/// an in-flight add-remote needs the 80ms tick. The recompose it drives is a blit diff, not a full
+/// redraw. Width collapse/expand keeps its separate bounded animation clock.
 pub(crate) fn sidebar_wants_animation(
-    _model: &crate::client::supervisor::ClientSupervisorModel,
+    model: &crate::client::supervisor::ClientSupervisorModel,
 ) -> bool {
-    false
+    model
+        .agent_groups()
+        .iter()
+        .any(|g| g.agents.iter().any(|r| r.status == "working"))
+        || model.host_banner_animation_active()
+        || model.add_remote_in_progress()
 }
 
 /// item 3 (Area 5): map the supervisor `RemoteManageRow`s into ui-owned `RemoteManageRowView`s

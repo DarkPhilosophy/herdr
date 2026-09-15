@@ -376,7 +376,7 @@ impl App {
             .tabs
             .iter()
             .find(|tab| tab.panes.contains_key(&pane_id))
-            .map(|tab| tab.display_name());
+            .and_then(|tab| tab.custom_name.clone());
         Some(crate::api::schema::AgentInfo {
             terminal_id: pane.terminal_id,
             name: terminal.agent_name.clone(),
