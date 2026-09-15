@@ -46,6 +46,16 @@ pub struct RemoteSetSessionParams {
     pub session: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ServerSetSidebarLayoutParams {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section_split: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sections_height: Option<u16>,
+}
+
 /// mockup #7: switch which side owns an existing remote's keybindings. Same `local`/`server`
 /// semantics `RemoteAddParams::keybindings` carries at add time.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
@@ -78,13 +88,14 @@ pub struct WorkspaceGitInfo {
     pub is_linked_worktree: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct UiSettingsInfo {
     pub sidebar_width: u16,
     pub sidebar_default_width: u16,
     pub sidebar_min_width: u16,
     pub sidebar_max_width: u16,
     pub sidebar_section_split_per_mille: u16,
+    pub sidebar_sections_height: u16,
     // mx sidebar config types carry hand-written serde impls; omit them from the
     // generated upstream API schema doc instead of deriving JsonSchema through them.
     #[schemars(skip)]
@@ -97,20 +108,29 @@ pub struct UiSettingsInfo {
     // generated upstream API schema doc instead of deriving JsonSchema through them.
     #[schemars(skip)]
     pub sidebar_host: crate::config::SidebarHostConfig,
+    #[schemars(skip)]
+    pub sidebar_sections: Vec<crate::config::CustomSidebarSectionConfig>,
+    #[schemars(skip)]
+    pub sidebar_section_reports:
+        std::collections::HashMap<String, Vec<crate::api::schema::SectionRow>>,
 }
 
 impl Default for UiSettingsInfo {
     fn default() -> Self {
         let ui = crate::config::Config::default().ui;
+        let sidebar_sections = ui.sidebar.resolved_sections();
         Self {
             sidebar_width: ui.sidebar_width,
             sidebar_default_width: ui.sidebar_width,
+            sidebar_sections_height: ui.sidebar_sections_height,
             sidebar_min_width: ui.sidebar_min_width,
             sidebar_max_width: ui.sidebar_max_width,
             sidebar_section_split_per_mille: 500,
             sidebar_spaces: ui.sidebar.spaces,
             sidebar_agents: ui.sidebar.agents,
             sidebar_host: ui.sidebar.host,
+            sidebar_sections,
+            sidebar_section_reports: std::collections::HashMap::new(),
         }
     }
 }

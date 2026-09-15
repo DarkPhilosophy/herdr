@@ -300,6 +300,27 @@ fn retarget_terminal_vectors() -> Vec<Value> {
         }),
     ]
 }
+fn session_env_vector() -> Value {
+    let session_env = ClientMessage::SessionEnv {
+        tokens: Vec::new(),
+        env: Vec::new(),
+    };
+
+    json!({
+        "name": "session_env_empty",
+        "direction": "client_to_server",
+        "message": "SessionEnv",
+        "field_order": ["tokens", "env"],
+        "fields": {
+            "tokens": [],
+            "env": []
+        },
+        "framed_hex": hex(&framed(&session_env)),
+        "note": "SessionEnv is appended at ClientMessage tag 18. Empty collections pin the tag \
+                 and field order without placing credentials or environment values in the fixture \
+                 corpus. Values are connection-scoped and purged when the client disconnects."
+    })
+}
 
 fn welcome_vector() -> Value {
     let welcome = ServerMessage::Welcome {
@@ -440,7 +461,11 @@ fn nondeterminism() -> Value {
 
 fn fixture_document() -> Value {
     let render_encodings = [RenderEncoding::SemanticFrame, RenderEncoding::TerminalAnsi];
-    let launch_modes = [ClientLaunchMode::App, ClientLaunchMode::TerminalAttach];
+    let launch_modes = [
+        ClientLaunchMode::App,
+        ClientLaunchMode::TerminalAttach,
+        ClientLaunchMode::AppDirectGraphics,
+    ];
 
     // Ordinals are read back out of real encodings so the table can never drift from the types.
     for (index, encoding) in render_encodings.iter().enumerate() {
@@ -470,6 +495,10 @@ fn fixture_document() -> Value {
     let retarget_terminal_tag = variant_tag(&ClientMessage::RetargetTerminal {
         target: FIXTURE_OBSERVE_TARGET.to_owned(),
         mode: TerminalSessionMode::Observe,
+    });
+    let session_env_tag = variant_tag(&ClientMessage::SessionEnv {
+        tokens: Vec::new(),
+        env: Vec::new(),
     });
 
     json!({
@@ -527,10 +556,11 @@ fn fixture_document() -> Value {
         },
         "enums": {
             "RenderEncoding": ["SemanticFrame", "TerminalAnsi"],
-            "ClientLaunchMode": ["App", "TerminalAttach"],
+            "ClientLaunchMode": ["App", "TerminalAttach", "AppDirectGraphics"],
             "ClientMessage": {
                 "ObserveTerminal": observe_terminal_tag,
-                "RetargetTerminal": retarget_terminal_tag
+                "RetargetTerminal": retarget_terminal_tag,
+                "SessionEnv": session_env_tag
             },
             "TerminalSessionMode": ["Observe", "Control"],
             "ServerMessage": { "Welcome": welcome_tag, "Terminal": terminal_tag }
@@ -544,7 +574,8 @@ fn fixture_document() -> Value {
             observe_terminal_vector(),
             wire_abi_prelude_vector(),
             retarget_terminal_vectors()[0].clone(),
-            retarget_terminal_vectors()[1].clone()
+            retarget_terminal_vectors()[1].clone(),
+            session_env_vector()
         ],
         "nondeterminism": nondeterminism(),
         "live_cross_check": {

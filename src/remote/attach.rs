@@ -66,6 +66,8 @@ pub(crate) struct RemoteLaunch {
     pub(crate) target: String,
     pub(crate) keybindings: RemoteKeybindings,
     pub(crate) live_handoff: bool,
+    pub(crate) tokens: Vec<(String, crate::protocol::SecretString)>,
+    pub(crate) env: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,10 +133,15 @@ pub(crate) fn extract_remote_args(
         cleaned.push(program.clone());
     }
 
+    let remote_requested = args[1..]
+        .iter()
+        .any(|arg| arg == "--remote" || arg.starts_with("--remote="));
     let mut remote_target = None;
     let mut keybindings = RemoteKeybindings::Local;
     let mut keybindings_seen = false;
     let mut live_handoff = false;
+    let mut tokens = Vec::new();
+    let mut env = Vec::new();
     let mut index = 1;
     while index < args.len() {
         let arg = &args[index];
@@ -183,6 +190,30 @@ pub(crate) fn extract_remote_args(
             index += 1;
             continue;
         }
+        let token_inline = arg.strip_prefix("--token=");
+        if remote_requested && (arg == "--token" || token_inline.is_some()) {
+            let Some(value) = token_inline.or_else(|| args.get(index + 1).map(String::as_str))
+            else {
+                return Err("missing value for --token".to_string());
+            };
+            let pairs = parse_session_values("--token", value, true)?;
+            tokens.extend(
+                pairs
+                    .into_iter()
+                    .map(|(name, value)| (name, crate::protocol::SecretString::new(value))),
+            );
+            index += if token_inline.is_some() { 1 } else { 2 };
+            continue;
+        }
+        let env_inline = arg.strip_prefix("--env=");
+        if remote_requested && (arg == "--env" || env_inline.is_some()) {
+            let Some(value) = env_inline.or_else(|| args.get(index + 1).map(String::as_str)) else {
+                return Err("missing value for --env".to_string());
+            };
+            env.extend(parse_session_values("--env", value, false)?);
+            index += if env_inline.is_some() { 1 } else { 2 };
+            continue;
+        }
 
         cleaned.push(arg.clone());
         index += 1;
@@ -192,6 +223,8 @@ pub(crate) fn extract_remote_args(
         target,
         keybindings,
         live_handoff,
+        tokens,
+        env,
     });
     if remote.is_none() && keybindings_seen {
         return Err("--remote-keybindings requires --remote".to_string());
@@ -201,6 +234,54 @@ pub(crate) fn extract_remote_args(
     }
 
     Ok((cleaned, remote))
+}
+
+fn parse_session_values(
+    flag: &str,
+    value: &str,
+    allow_file: bool,
+) -> Result<Vec<(String, String)>, String> {
+    if let Some((name, value)) = value.split_once('=') {
+        if name.is_empty() {
+            return Err(format!("{flag} name must not be empty"));
+        }
+        return Ok(vec![(name.to_string(), value.to_string())]);
+    }
+    if !allow_file {
+        return Err(format!("{flag} must use NAME=VALUE"));
+    }
+    let content = std::fs::read_to_string(value)
+        .map_err(|err| format!("{flag} value is neither NAME=VALUE nor a readable file: {err}"))?;
+    let mut pairs = Vec::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            return Err(format!("{flag} file `{value}` contains a line without `=`"));
+        };
+        if name.trim().is_empty() {
+            return Err(format!("{flag} file `{value}` has an empty name"));
+        }
+        pairs.push((name.trim().to_string(), value.to_string()));
+    }
+    Ok(pairs)
+}
+
+fn serialized_session_tokens(tokens: &[(String, crate::protocol::SecretString)]) -> String {
+    tokens
+        .iter()
+        .map(|(name, value)| format!("{name}={}", value.expose()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn serialized_session_env(env: &[(String, String)]) -> String {
+    env.iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn validate_remote_target(target: &str) -> Result<&str, String> {
@@ -259,12 +340,16 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         prepared_remote.remote_herdr,
     )?;
 
+    let session_tokens = serialized_session_tokens(&remote.tokens);
+    let session_env = serialized_session_env(&remote.env);
     run_client_process(
         bridge.client_socket_path(),
         bridge.api_socket_path(),
         &reattach_command,
         remote.keybindings,
         &remote.target,
+        &session_tokens,
+        &session_env,
     )
 }
 
@@ -2685,6 +2770,8 @@ fn run_client_process(
     reattach_command: &str,
     keybindings: RemoteKeybindings,
     main_remote_target: &str,
+    session_tokens: &str,
+    session_env: &str,
 ) -> io::Result<()> {
     let exe = std::env::current_exe()?;
     let status = remote_client_command(
@@ -2694,6 +2781,8 @@ fn run_client_process(
         reattach_command,
         keybindings,
         main_remote_target,
+        session_tokens,
+        session_env,
     )
     .stdin(Stdio::inherit())
     .stdout(Stdio::inherit())
@@ -2717,6 +2806,8 @@ fn remote_client_command(
     reattach_command: &str,
     keybindings: RemoteKeybindings,
     main_remote_target: &str,
+    session_tokens: &str,
+    session_env: &str,
 ) -> Command {
     let mut command = Command::new(exe);
     command
@@ -2731,6 +2822,12 @@ fn remote_client_command(
         .env(MAIN_DISPLAY_NAME_ENV_VAR, main_remote_target)
         .env(MAIN_REMOTE_TARGET_ENV_VAR, main_remote_target)
         .env(REMOTE_KEYBINDINGS_ENV_VAR, keybindings.as_str());
+    if !session_tokens.is_empty() {
+        command.env("HERDR_SESSION_TOKENS", session_tokens);
+    }
+    if !session_env.is_empty() {
+        command.env("HERDR_SESSION_ENV", session_env);
+    }
     command
 }
 
@@ -3322,6 +3419,26 @@ mod tests {
     }
 
     #[test]
+    fn extract_remote_args_forwards_session_scoped_token_and_env() {
+        let args = vec![
+            "herdr".into(),
+            "--remote=dev".into(),
+            "--token=API_KEY=secret".into(),
+            "--env".into(),
+            "REGION=eu".into(),
+        ];
+
+        let (cleaned, remote) = extract_remote_args(&args).unwrap();
+
+        assert_eq!(cleaned, vec!["herdr"]);
+        let remote = remote.unwrap();
+        assert_eq!(remote.tokens.len(), 1);
+        assert_eq!(remote.tokens[0].0, "API_KEY");
+        assert_eq!(remote.tokens[0].1.expose(), "secret");
+        assert_eq!(remote.env, vec![("REGION".to_string(), "eu".to_string())]);
+    }
+
+    #[test]
     fn extract_remote_args_accepts_explicit_handoff() {
         let args = vec!["herdr".into(), "--remote=dev".into(), "--handoff".into()];
 
@@ -3489,6 +3606,8 @@ mod tests {
             "herdr --remote iq-64",
             RemoteKeybindings::Local,
             "iq-64",
+            "",
+            "",
         );
         let envs: BTreeMap<String, Option<String>> = command
             .get_envs()

@@ -1,4 +1,7 @@
-use std::{collections::BTreeSet, num::NonZeroUsize};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    num::NonZeroUsize,
+};
 
 use crossterm::event::KeyModifiers;
 use serde::{de, Deserialize, Deserializer, Serialize};
@@ -997,6 +1000,7 @@ pub struct SidebarConfig {
     pub spaces: SidebarSpacesConfig,
     pub agents: SidebarAgentsConfig,
     pub host: SidebarHostConfig,
+    pub sections: Vec<super::sidebar::CustomSidebarSectionConfig>,
 }
 
 /// Host-banner sidebar configuration (item 2 / C3). Styles the per-host banner row that
@@ -1264,11 +1268,16 @@ impl SidebarColorPreset {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SidebarSpacesConfig {
     pub lines: Vec<Vec<SidebarItem<SidebarSpaceField>>>,
+    pub rows: Vec<Vec<super::sidebar::SpaceSidebarToken>>,
+    pub row_gap: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SidebarAgentsConfig {
     pub lines: Vec<Vec<SidebarItem<SidebarAgentField>>>,
+    pub rows: Vec<Vec<super::sidebar::AgentSidebarToken>>,
+    pub rows_by_agent: BTreeMap<String, Vec<Vec<super::sidebar::AgentSidebarToken>>>,
+    pub row_gap: u16,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -1365,12 +1374,29 @@ fn parse_sidebar_agent_field(value: &str) -> Option<SidebarAgentField> {
 #[serde(default)]
 struct RawSidebarSpacesConfig {
     lines: Option<Vec<Vec<RawSidebarItem>>>,
+    #[serde(
+        default,
+        deserialize_with = "super::sidebar::deserialize_optional_sidebar_rows"
+    )]
+    rows: Option<Vec<Vec<super::sidebar::SpaceSidebarToken>>>,
+    row_gap: Option<u16>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 struct RawSidebarAgentsConfig {
     lines: Option<Vec<Vec<RawSidebarItem>>>,
+    #[serde(
+        default,
+        deserialize_with = "super::sidebar::deserialize_optional_sidebar_rows"
+    )]
+    rows: Option<Vec<Vec<super::sidebar::AgentSidebarToken>>>,
+    #[serde(
+        default,
+        deserialize_with = "super::sidebar::deserialize_optional_rows_by_agent"
+    )]
+    rows_by_agent: Option<BTreeMap<String, Vec<Vec<super::sidebar::AgentSidebarToken>>>>,
+    row_gap: Option<u16>,
 }
 
 impl<'de> Deserialize<'de> for SidebarSpacesConfig {
@@ -1395,27 +1421,38 @@ impl<'de> Deserialize<'de> for SidebarAgentsConfig {
 
 impl RawSidebarSpacesConfig {
     fn into_config(self) -> SidebarSpacesConfig {
-        self.lines
-            .map(|lines| SidebarSpacesConfig {
-                lines: normalize_sidebar_space_lines(raw_sidebar_lines(
-                    lines,
-                    parse_sidebar_space_field,
-                )),
-            })
-            .unwrap_or_default()
+        let mut config = SidebarSpacesConfig::default();
+        if let Some(lines) = self.lines {
+            config.lines =
+                normalize_sidebar_space_lines(raw_sidebar_lines(lines, parse_sidebar_space_field));
+        }
+        if let Some(rows) = self.rows {
+            config.rows = rows;
+        }
+        if let Some(row_gap) = self.row_gap {
+            config.row_gap = row_gap;
+        }
+        config
     }
 }
 
 impl RawSidebarAgentsConfig {
     fn into_config(self) -> SidebarAgentsConfig {
-        self.lines
-            .map(|lines| SidebarAgentsConfig {
-                lines: normalize_sidebar_agent_lines(raw_sidebar_lines(
-                    lines,
-                    parse_sidebar_agent_field,
-                )),
-            })
-            .unwrap_or_default()
+        let mut config = SidebarAgentsConfig::default();
+        if let Some(lines) = self.lines {
+            config.lines =
+                normalize_sidebar_agent_lines(raw_sidebar_lines(lines, parse_sidebar_agent_field));
+        }
+        if let Some(rows) = self.rows {
+            config.rows = rows;
+        }
+        if let Some(rows_by_agent) = self.rows_by_agent {
+            config.rows_by_agent = rows_by_agent;
+        }
+        if let Some(row_gap) = self.row_gap {
+            config.row_gap = row_gap;
+        }
+        config
     }
 }
 
@@ -1718,6 +1755,17 @@ impl Default for SidebarSpacesConfig {
                     SidebarItem::visible(SidebarSpaceField::BranchStatus),
                 ],
             ],
+            rows: vec![
+                vec![
+                    super::sidebar::SpaceSidebarToken::StateIcon,
+                    super::sidebar::SpaceSidebarToken::Workspace,
+                ],
+                vec![
+                    super::sidebar::SpaceSidebarToken::Branch,
+                    super::sidebar::SpaceSidebarToken::GitStatus,
+                ],
+            ],
+            row_gap: 0,
         }
     }
 }
@@ -1740,6 +1788,16 @@ impl Default for SidebarAgentsConfig {
                     SidebarItem::visible(SidebarAgentField::AgentName),
                 ],
             ],
+            rows: vec![
+                vec![
+                    super::sidebar::AgentSidebarToken::StateIcon,
+                    super::sidebar::AgentSidebarToken::Workspace,
+                    super::sidebar::AgentSidebarToken::Tab,
+                ],
+                vec![super::sidebar::AgentSidebarToken::Agent],
+            ],
+            rows_by_agent: BTreeMap::new(),
+            row_gap: 0,
         }
     }
 }

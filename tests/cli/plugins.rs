@@ -839,11 +839,8 @@ command = ["sh", "-c", "echo new"]
 
     fs::create_dir_all(&config_home).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
-    let managed_checkout = config_home
-        .join("herdr-dev")
-        .join("plugins")
-        .join("github")
-        .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
+    let managed_checkout =
+        managed_github_plugin_dir(&config_home).join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
     fs::create_dir_all(&managed_checkout).unwrap();
     fs::write(managed_checkout.join("old-marker"), "old checkout\n").unwrap();
 
@@ -965,11 +962,8 @@ command = ["sh", "-c", "echo install"]
 
     fs::create_dir_all(&config_home).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
-    let managed_checkout = config_home
-        .join("herdr-dev")
-        .join("plugins")
-        .join("github")
-        .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
+    let managed_checkout =
+        managed_github_plugin_dir(&config_home).join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
     let git_config = base.join("gitconfig");
     fs::write(
         &git_config,
@@ -1093,11 +1087,8 @@ command = ["sh", "-c", "echo install"]
 
     fs::create_dir_all(&config_home).unwrap();
     fs::create_dir_all(&runtime_dir).unwrap();
-    let managed_checkout = config_home
-        .join("herdr-dev")
-        .join("plugins")
-        .join("github")
-        .join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
+    let managed_checkout =
+        managed_github_plugin_dir(&config_home).join(WORKTREE_BOOTSTRAP_MANAGED_COMPONENT);
     let git_config = base.join("gitconfig");
     fs::write(
         &git_config,

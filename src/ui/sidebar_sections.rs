@@ -60,17 +60,14 @@ pub(crate) fn sidebar_regions_layout(app: &AppState, area: Rect) -> SidebarRegio
     }
 }
 
-fn live_sections_min_height(app: &AppState) -> Option<u16> {
-    app.sidebar_sections_config.iter().find_map(|config| {
-        app.sidebar_section_reports
-            .rows(&config.id)
-            // Divider + optional title header + one content row.
-            .map(|_| 2u16.saturating_add(u16::from(config.title.is_some())))
-    })
+fn configured_sections_min_height(app: &AppState) -> Option<u16> {
+    app.sidebar_sections_config
+        .first()
+        .map(|config| 2u16.saturating_add(u16::from(config.title.is_some())))
 }
 
 pub(crate) fn sidebar_sections_height_bounds(app: &AppState, area: Rect) -> Option<(u16, u16)> {
-    let min = live_sections_min_height(app)?;
+    let min = configured_sections_min_height(app)?;
     let max = area
         .height
         .saturating_sub(MIN_PRIMARY_REGION_HEIGHT.saturating_mul(2));
@@ -1415,7 +1412,7 @@ mod tests {
     }
 
     #[test]
-    fn section_block_is_absent_when_empty_expired_or_unconfigured() {
+    fn configured_section_reserves_persisted_height_before_and_after_reports() {
         let detail_area = Rect::new(0, 0, 20, 10);
         let mut app = AppState::test_new();
         app.sidebar_sections_config = vec![config("build", Some("build"), 6)];
@@ -1423,7 +1420,7 @@ mod tests {
             sidebar_regions_layout(&app, detail_area)
                 .sections_area
                 .height,
-            0
+            4
         );
 
         assert_eq!(
@@ -1441,7 +1438,7 @@ mod tests {
             sidebar_regions_layout(&app, detail_area)
                 .sections_area
                 .height,
-            0
+            4
         );
 
         let now = Instant::now();
@@ -1463,7 +1460,7 @@ mod tests {
             sidebar_regions_layout(&app, detail_area)
                 .sections_area
                 .height,
-            0
+            4
         );
 
         report(&mut app, "unconfigured", vec![span_row("hidden")]);

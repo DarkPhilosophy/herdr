@@ -175,7 +175,9 @@ mod tests {
             state_entered_at: None,
             work_started_at: None,
             last_agent_state_change_seq: None,
+            custom_status: None,
             state_labels: std::collections::HashMap::new(),
+            working_duration: None,
             tokens: std::collections::HashMap::new(),
         }
     }

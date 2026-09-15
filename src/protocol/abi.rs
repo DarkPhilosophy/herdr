@@ -87,7 +87,11 @@ pub const WIRE_ABI_FORK: [u8; 8] = *b"herdr-mx";
 /// table is byte-identical across the merge, which is how we know this is an epoch bump and not a
 /// merge-resolution bug. `PROTOCOL_VERSION` again did not move: the handshake byte stream is
 /// unchanged and upstream itself is still 20.
-pub const WIRE_ABI_EPOCH: u32 = 3;
+///
+/// Epoch 4 appends `ClientMessage::SessionEnv` at tag 18. Existing tags and payloads remain
+/// byte-identical, but an epoch-4 client may send a message an epoch-3 server cannot decode, so the
+/// symmetric compatibility table rejects epoch 3 rather than accepting only the safe direction.
+pub const WIRE_ABI_EPOCH: u32 = 4;
 
 /// `magic(4) + fork(8) + abi_epoch(4) + protocol_version(4) + schema_fingerprint(8)`.
 pub const WIRE_ABI_PRELUDE_LEN: usize = 28;
@@ -361,7 +365,7 @@ pub fn legacy_peer_rejection() -> String {
 ///      `docs/next/protocol/abi-history.json` declaring whether the outgoing ABI stays accepted.
 ///
 /// Repinning without (1) and (3) is the laundering this whole module exists to prevent.
-pub const WIRE_SCHEMA_FINGERPRINT: [u8; 8] = [0x14, 0xe8, 0x47, 0xff, 0x6a, 0xe1, 0xd9, 0xf2];
+pub const WIRE_SCHEMA_FINGERPRINT: [u8; 8] = [0x95, 0x68, 0xc9, 0xeb, 0xf5, 0x08, 0x82, 0x83];
 
 /// A digest over the *encoded bytes* of one exemplar of every `ClientMessage` and `ServerMessage`
 /// variant, plus a sweep of the nested enums and payload structs they reach.
@@ -711,6 +715,13 @@ fn client_message_exemplars() -> Vec<ClientMessage> {
             transfer_id: 0xabac_adae_afb0_b1b2,
             image_id: 0xb3b4_b5b6,
         },
+        ClientMessage::SessionEnv {
+            tokens: vec![(
+                EX_STR.to_owned(),
+                crate::protocol::SecretString::new(EX_STR),
+            )],
+            env: vec![(EX_STR.to_owned(), EX_STR.to_owned())],
+        },
     ]);
 
     exemplars
@@ -924,6 +935,7 @@ mod tests {
                 ClientMessage::GraphicsTransmissionResult { .. } => "GraphicsTransmissionResult",
                 ClientMessage::InputPixels { .. } => "InputPixels",
                 ClientMessage::GraphicsTransmissionStarted { .. } => "GraphicsTransmissionStarted",
+                ClientMessage::SessionEnv { .. } => "SessionEnv",
             }
         }
         fn server_name(message: &ServerMessage) -> &'static str {
@@ -953,7 +965,7 @@ mod tests {
             client_message_exemplars().iter().map(client_name).collect();
         assert_eq!(
             client_covered.len(),
-            18,
+            19,
             "ClientMessage exemplars cover {client_covered:?}; every variant needs one"
         );
 

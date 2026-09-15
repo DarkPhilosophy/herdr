@@ -223,6 +223,7 @@ mod tests {
                     color: Default::default(),
                 },
             ]],
+            ..Default::default()
         }
     }
 

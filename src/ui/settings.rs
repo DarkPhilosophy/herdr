@@ -696,6 +696,11 @@ fn render_settings_sidebar_config(app: &AppState, frame: &mut Frame, area: Rect)
                     rows.push((Line::from("   (empty)"), None, false));
                 }
             }
+            rows.push((
+                Line::from(format!(" card gap  < {} >", app.sidebar_space.row_gap)),
+                Some(ordered.len()),
+                false,
+            ));
         }
         SidebarConfigGroup::Agents => {
             let ordered = ordered_sidebar_agent_items(&app.sidebar_agent);
@@ -729,6 +734,11 @@ fn render_settings_sidebar_config(app: &AppState, frame: &mut Frame, area: Rect)
                     rows.push((Line::from("   (empty)"), None, false));
                 }
             }
+            rows.push((
+                Line::from(format!(" card gap  < {} >", app.sidebar_agent.row_gap)),
+                Some(ordered.len()),
+                false,
+            ));
         }
         // item 2 (C3): the host group exposes a fixed option list (no off control). Each row
         // shows `label < value >`; `count` is a checkbox. Selected/edit styling is shared with

@@ -928,3 +928,19 @@ fn codex_osc_working_beats_weak_blocker_screen() {
         Some("osc_title_working")
     );
 }
+
+#[test]
+fn omp_manifest_tracks_live_title_spinner_without_lifecycle_hooks() {
+    let working = osc_explain(
+        Agent::Omp,
+        "",
+        "π ⠋ Fix omp working idle state",
+        "",
+    );
+    assert_eq!(working.state, AgentState::Working);
+    assert!(working.visible_working);
+
+    let idle = osc_explain(Agent::Omp, "", "π Fix omp working idle state", "");
+    assert_eq!(idle.state, AgentState::Idle);
+    assert!(idle.visible_idle);
+}

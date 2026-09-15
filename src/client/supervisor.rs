@@ -1445,10 +1445,14 @@ impl ClientSupervisorModel {
     pub(crate) fn refresh_main_summary_from_api(
         &mut self,
         api: &mut impl SupervisorApi,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let summary = request_server_summary(api)?;
+        let changed = self
+            .server(&ServerId::main())
+            .is_none_or(|server| server.summaries != summary);
         self.set_summary(&ServerId::main(), summary)
-            .map_err(|()| "main server is missing from supervisor model".to_string())
+            .map_err(|()| "main server is missing from supervisor model".to_string())?;
+        Ok(changed)
     }
 
     /// #42: apply a [`MainSupervisorSnapshot`] fetched off the UI loop (registry + UI settings +
@@ -4363,7 +4367,7 @@ impl ServerSummary {
                     let label = agent_label(&agent);
                     let status = agent_status_label(agent.agent_status);
                     AgentSummary {
-                        agent_id: agent.terminal_id,
+                        agent_id: agent.pane_id,
                         workspace_id: agent.workspace_id,
                         label,
                         status,
@@ -5082,6 +5086,20 @@ mod tests {
                     worktree_is_linked: false,
                 },
             ]
+        );
+        assert_eq!(
+            model
+                .focus_agent_route(&ServerId::main(), "pane-1")
+                .api_request("test"),
+            Some(crate::api::schema::Request {
+                id: "test".into(),
+                method: crate::api::schema::Method::AgentFocus(
+                    crate::api::schema::AgentTarget {
+                        target: "pane-1".into(),
+                    },
+                ),
+            }),
+            "an Agent row must focus through the pane id accepted by agent.focus"
         );
     }
 

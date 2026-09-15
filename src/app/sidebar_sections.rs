@@ -75,6 +75,28 @@ impl SidebarSections {
             .map(|section| section.rows.as_slice())
             .filter(|rows| !rows.is_empty())
     }
+    pub(crate) fn snapshot(&self) -> HashMap<String, Vec<SectionRow>> {
+        self.entries
+            .iter()
+            .filter(|(_, section)| !section.rows.is_empty())
+            .map(|(id, section)| (id.clone(), section.rows.clone()))
+            .collect()
+    }
+
+    pub(crate) fn replace_snapshot(&mut self, rows: HashMap<String, Vec<SectionRow>>) {
+        self.entries = rows
+            .into_iter()
+            .map(|(id, rows)| {
+                (
+                    id,
+                    SidebarSection {
+                        rows,
+                        ..SidebarSection::default()
+                    },
+                )
+            })
+            .collect();
+    }
 
     pub(crate) fn next_expiry(&self) -> Option<Instant> {
         self.entries
@@ -104,12 +126,16 @@ mod tests {
     use crate::api::schema::{SectionRow, SectionSpan};
 
     fn row(text: &str) -> SectionRow {
-        SectionRow::Spans { spans: vec![SectionSpan {
-            text: text.into(),
-            color: None,
-            bold: false,
-            dim: false,
-        }], right: Vec::new(), wrap: false }
+        SectionRow::Spans {
+            spans: vec![SectionSpan {
+                text: text.into(),
+                color: None,
+                bold: false,
+                dim: false,
+            }],
+            right: Vec::new(),
+            wrap: false,
+        }
     }
 
     #[test]

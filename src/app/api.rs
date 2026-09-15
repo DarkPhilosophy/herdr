@@ -972,6 +972,29 @@ impl App {
                     settings: self.ui_settings_info(),
                 },
             },
+            Method::ServerSetSidebarLayout(params) => {
+                if let Some(width) = params.width {
+                    self.state.sidebar_width =
+                        width.clamp(self.state.sidebar_min_width, self.state.sidebar_max_width);
+                    self.state.sidebar_width_source =
+                        crate::app::state::SidebarWidthSource::Manual;
+                    self.state.sidebar_width_auto = false;
+                }
+                if let Some(section_split) = params.section_split {
+                    self.state.sidebar_section_split = section_split.clamp(0.1, 0.9);
+                }
+                if let Some(sections_height) = params.sections_height {
+                    self.state.sidebar_sections_height = sections_height;
+                    self.state.sidebar_sections_height_source =
+                        crate::app::state::SidebarSectionsHeightSource::Manual;
+                }
+                self.state.mark_session_dirty();
+                self.schedule_session_save();
+                SuccessResponse {
+                    id: request.id,
+                    result: ResponseResult::Ok {},
+                }
+            }
             Method::ServerAgentManifests(_) => {
                 self.state.refresh_agent_manifest_summaries();
                 let update_status = crate::detect::manifest_update::load_status();
@@ -1257,12 +1280,15 @@ impl App {
             sidebar_default_width: self.state.default_sidebar_width,
             sidebar_min_width: self.state.sidebar_min_width,
             sidebar_max_width: self.state.sidebar_max_width,
+            sidebar_sections_height: self.state.sidebar_sections_height,
             sidebar_section_split_per_mille: sidebar_split_per_mille(
                 self.state.sidebar_section_split,
             ),
             sidebar_spaces: self.state.sidebar_space.clone(),
             sidebar_agents: self.state.sidebar_agent.clone(),
             sidebar_host: self.state.sidebar_host.clone(),
+            sidebar_sections: self.state.sidebar_sections_config.clone(),
+            sidebar_section_reports: self.state.sidebar_section_reports.snapshot(),
         }
     }
 

@@ -123,7 +123,7 @@ pub const AGENT_REGISTRY: &[AgentInfo] = &[
         label: "omp",
         executable: "omp",
         aliases: &[],
-        has_screen_manifest: false,
+        has_screen_manifest: true,
     },
     AgentInfo {
         agent: Agent::Mastracode,
@@ -200,6 +200,13 @@ pub const AGENT_REGISTRY: &[AgentInfo] = &[
         label: "qodercli",
         executable: "qodercli",
         aliases: &["qoderclicn", "qoder", "qodercn"],
+        has_screen_manifest: true,
+    },
+    AgentInfo {
+        agent: Agent::Qwen,
+        label: "qwen",
+        executable: "qwen",
+        aliases: &["qwen-code", "qwen code"],
         has_screen_manifest: true,
     },
     AgentInfo {

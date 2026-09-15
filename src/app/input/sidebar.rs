@@ -568,10 +568,8 @@ impl AppState {
             return false;
         }
 
-        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
-            self.view.sidebar_rect,
-            self.sidebar_section_split,
-        );
+        let detail_area =
+            crate::ui::sidebar_regions_layout(self, self.view.sidebar_rect).agent_area;
         let rect = crate::ui::agent_panel_scope_toggle_rect(detail_area, self.agent_panel_scope);
         rect.width > 0
             && col >= rect.x
@@ -660,9 +658,7 @@ mod tests {
         app::state::{
             AgentPanelScope, AgentPanelSort, AppState, DragTarget, Mode, SidebarAgentItem,
         },
-        config::{
-            CustomSidebarSectionConfig, SidebarCollapsedModeConfig, SidebarSectionPlacement,
-        },
+        config::{CustomSidebarSectionConfig, SidebarCollapsedModeConfig, SidebarSectionPlacement},
         detect::{Agent, AgentState},
         workspace::Workspace,
     };

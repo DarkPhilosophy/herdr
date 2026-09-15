@@ -200,6 +200,7 @@ mod tests {
             app.state.agent_panel_scope,
             app.state.sidebar_width,
             app.state.sidebar_section_split,
+            app.state.sidebar_sections_height,
             app.state.collapsed_space_keys.clone(),
             app.state.remote_registry.clone(),
             &app.state.pane_id_aliases,

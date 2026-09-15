@@ -190,6 +190,9 @@ pub(crate) struct ClientCompositor {
     // `Some(ratio)` is a user drag. Fed into `from_model` and tracked while `resizing_section`.
     section_split: Option<f32>,
     resizing_section: bool,
+    // Client-local height of the API-fed bottom section. `None` follows server settings.
+    sections_height: Option<u16>,
+    resizing_sections: bool,
     // #26: instant of the last left-press on the width divider, for double-click reset detection.
     last_divider_down: Option<Instant>,
     // #17: instant of the last PTY-resize we emitted during the CURRENT width-divider drag. The
@@ -504,6 +507,8 @@ impl ClientCompositor {
             resizing_sidebar: false,
             section_split: None,
             resizing_section: false,
+            sections_height: None,
+            resizing_sections: false,
             last_divider_down: None,
             last_resize_emitted: None,
             workspace_press: None,
@@ -529,6 +534,16 @@ impl ClientCompositor {
     #[cfg(test)]
     pub(crate) fn sidebar_width(&self) -> u16 {
         self.sidebar_width
+    }
+
+    pub(crate) fn persisted_sidebar_layout(
+        &self,
+    ) -> crate::api::schema::ServerSetSidebarLayoutParams {
+        crate::api::schema::ServerSetSidebarLayoutParams {
+            width: Some(self.sidebar_width),
+            section_split: self.section_split,
+            sections_height: self.sections_height,
+        }
     }
 
     /// #24: whether the prefix key has been pressed and the next key should be matched against
@@ -840,10 +855,9 @@ impl ClientCompositor {
             host_height,
             Instant::now(),
         );
-        let (_, detail_area) = crate::ui::expanded_sidebar_sections(
-            snapshot.app.view.sidebar_rect,
-            snapshot.app.sidebar_section_split,
-        );
+        let detail_area =
+            crate::ui::sidebar_regions_layout(&snapshot.app, snapshot.app.view.sidebar_rect)
+                .agent_area;
         let over_agent_panel = detail_area != Rect::default()
             && mouse.row >= detail_area.y
             && mouse.row < detail_area.y.saturating_add(detail_area.height);
@@ -903,21 +917,18 @@ impl ClientCompositor {
             Instant::now(),
         );
         let sidebar_rect = snapshot.app.view.sidebar_rect;
-        let divider = crate::ui::sidebar_section_divider_rect(
-            sidebar_rect,
-            snapshot.app.sidebar_section_split,
-        );
+        let divider = crate::ui::spaces_agents_divider_rect(&snapshot.app, sidebar_rect);
 
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left)
                 if rect_contains(divider, mouse.column, mouse.row) =>
             {
                 self.resizing_section = true;
-                self.set_section_split_from_row(sidebar_rect, mouse.row);
+                self.set_section_split_from_row(&snapshot.app, sidebar_rect, mouse.row);
                 Some(true)
             }
             MouseEventKind::Drag(MouseButton::Left) if self.resizing_section => {
-                self.set_section_split_from_row(sidebar_rect, mouse.row);
+                self.set_section_split_from_row(&snapshot.app, sidebar_rect, mouse.row);
                 Some(true)
             }
             MouseEventKind::Up(MouseButton::Left) if self.resizing_section => {
@@ -928,11 +939,81 @@ impl ClientCompositor {
         }
     }
 
-    /// #16: set the section split from an absolute row, clamped 0.1..0.9 (mirrors the host's
-    /// `set_sidebar_section_split`). Requires a tall-enough sidebar (>= 6 rows), matching
-    /// `sidebar_section_divider_rect`'s guard.
-    fn set_section_split_from_row(&mut self, sidebar_rect: Rect, row: u16) {
-        let content_height = sidebar_rect.height;
+    /// Drag the divider above API-fed sections. This is a per-client view preference, matching the
+    /// monolithic host: it changes only sidebar geometry and therefore requires a redraw, not a PTY
+    /// resize or server mutation.
+    pub(crate) fn handle_sidebar_sections_divider_mouse(
+        &mut self,
+        model: &crate::client::supervisor::ClientSupervisorModel,
+        mouse: &crossterm::event::MouseEvent,
+        host_width: u16,
+        host_height: u16,
+    ) -> Option<bool> {
+        use crossterm::event::{MouseButton, MouseEventKind};
+
+        let sidebar_width = self.effective_sidebar_width(host_width);
+        if sidebar_width == 0 || host_height == 0 {
+            return None;
+        }
+        let snapshot = ClientSidebarSnapshot::from_model(
+            model,
+            self,
+            sidebar_width,
+            host_width,
+            host_height,
+            Instant::now(),
+        );
+        let sidebar_rect = snapshot.app.view.sidebar_rect;
+        let divider = crate::ui::sidebar_sections_divider_rect(&snapshot.app, sidebar_rect);
+
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left)
+                if rect_contains(divider, mouse.column, mouse.row) =>
+            {
+                self.resizing_sections = true;
+                self.set_sections_height_from_row(&snapshot.app, sidebar_rect, mouse.row);
+                Some(true)
+            }
+            MouseEventKind::Drag(MouseButton::Left) if self.resizing_sections => {
+                self.set_sections_height_from_row(&snapshot.app, sidebar_rect, mouse.row);
+                Some(true)
+            }
+            MouseEventKind::Up(MouseButton::Left) if self.resizing_sections => {
+                self.resizing_sections = false;
+                Some(true)
+            }
+            _ => None,
+        }
+    }
+
+    fn set_sections_height_from_row(
+        &mut self,
+        app: &crate::app::AppState,
+        sidebar_rect: Rect,
+        row: u16,
+    ) {
+        let Some((min, max)) = crate::ui::sidebar_sections_height_bounds(app, sidebar_rect) else {
+            return;
+        };
+        let height = sidebar_rect
+            .y
+            .saturating_add(sidebar_rect.height)
+            .saturating_sub(row)
+            .clamp(min, max);
+        self.sections_height = Some(height);
+    }
+
+    /// Set the spaces/agents split using the exact geometry used by the original host sidebar.
+    fn set_section_split_from_row(
+        &mut self,
+        app: &crate::app::AppState,
+        sidebar_rect: Rect,
+        row: u16,
+    ) {
+        let sections_height = crate::ui::sidebar_regions_layout(app, sidebar_rect)
+            .sections_area
+            .height;
+        let content_height = sidebar_rect.height.saturating_sub(sections_height);
         if content_height < 6 {
             return;
         }
@@ -989,14 +1070,10 @@ impl ClientCompositor {
             host_height,
             Instant::now(),
         );
-        let ws_area = crate::ui::workspace_list_rect(
-            snapshot.app.view.sidebar_rect,
-            snapshot.app.sidebar_section_split,
-        );
-        let (_, agent_area) = crate::ui::expanded_sidebar_sections(
-            snapshot.app.view.sidebar_rect,
-            snapshot.app.sidebar_section_split,
-        );
+        let layout =
+            crate::ui::sidebar_regions_layout(&snapshot.app, snapshot.app.view.sidebar_rect);
+        let ws_area = layout.workspace_area;
+        let agent_area = layout.agent_area;
         let ws_track = crate::ui::workspace_list_scrollbar_rect(&snapshot.app, ws_area);
         let agent_track = crate::ui::agent_panel_scrollbar_rect(&snapshot.app, agent_area);
         let ws_metrics = crate::ui::workspace_list_scroll_metrics(&snapshot.app, ws_area);
@@ -1974,6 +2051,9 @@ impl ClientSidebarSnapshot {
         app.sidebar_section_split = compositor
             .section_split
             .unwrap_or_else(|| settings.sidebar_section_split());
+        app.sidebar_sections_height = compositor
+            .sections_height
+            .unwrap_or(settings.sidebar_sections_height);
         // #20: client-local scope drives both the rendered entries and the scroll-metric clamp
         // below, so it must be set before `agent_panel_scroll_metrics` is consulted.
         app.agent_panel_scope = compositor.agent_panel_scope;
@@ -1981,6 +2061,9 @@ impl ClientSidebarSnapshot {
         app.sidebar_agent = settings.sidebar_agents.clone();
         // item 2 (C3): host-banner styling rides UiSettingsInfo over the wire.
         app.sidebar_host = settings.sidebar_host.clone();
+        app.sidebar_sections_config = settings.sidebar_sections.clone();
+        app.sidebar_section_reports
+            .replace_snapshot(settings.sidebar_section_reports.clone());
         app.global_menu_extra_labels = vec!["add remote", "manage remotes"];
         // #25: gate the SHARED renderer onto its collapsed layout BEFORE geometry is computed, so
         // the collapsed sections + toggle rect are what gets laid out and what `hit_test` reads
@@ -2222,8 +2305,7 @@ impl ClientSidebarSnapshot {
                 per_ws_agent_routes.into_iter().flatten().collect()
             }
         };
-        let (_, detail_area) =
-            crate::ui::expanded_sidebar_sections(app.view.sidebar_rect, app.sidebar_section_split);
+        let detail_area = crate::ui::sidebar_regions_layout(&app, app.view.sidebar_rect).agent_area;
         app.agent_panel_scroll = compositor
             .agent_panel_scroll
             .min(crate::ui::agent_panel_scroll_metrics(&app, detail_area).max_offset_from_bottom);
@@ -2765,19 +2847,13 @@ fn agent_state_from_status(status: &str) -> (AgentState, bool) {
     }
 }
 
-/// Whether anything on the client sidebar is currently animating, gating the animation
-/// cadence (no idle CPU spin). Read-only over the cached model; performs NO I/O. The ONLY
-/// banner-active input is `host_banner_animation_active` (contract Area 1: do not invent a
-/// second clock or second flag); item 2 fills the banner hook, until then it is `false`.
+/// Composited clients redraw when supervisor data changes. Do not run a second periodic sidebar
+/// animation clock: repainting the full composited terminal for a spinner or host gradient causes
+/// visible whole-screen flicker. Width collapse/expand keeps its separate bounded animation clock.
 pub(crate) fn sidebar_wants_animation(
-    model: &crate::client::supervisor::ClientSupervisorModel,
+    _model: &crate::client::supervisor::ClientSupervisorModel,
 ) -> bool {
-    model
-        .agent_groups()
-        .iter()
-        .any(|g| g.agents.iter().any(|r| r.status == "working"))
-        || model.host_banner_animation_active()
-        || model.add_remote_in_progress()
+    false
 }
 
 /// item 3 (Area 5): map the supervisor `RemoteManageRow`s into ui-owned `RemoteManageRowView`s
@@ -3209,11 +3285,10 @@ fn hit_test_confirm_close_workspace(
 }
 
 /// #20: the rect of the agents-panel "all"/"current" toggle in the rendered snapshot, derived from
-/// the SAME `expanded_sidebar_sections` detail area + `agent_panel_toggle_rect` the renderer uses
+/// the same `sidebar_regions_layout` agent area + `agent_panel_toggle_rect` the renderer uses
 /// (`render_agent_detail`). Returns an empty rect when the panel is too short to draw the toggle.
 fn agent_panel_toggle_hit_rect(app: &crate::app::AppState) -> Rect {
-    let (_, detail_area) =
-        crate::ui::expanded_sidebar_sections(app.view.sidebar_rect, app.sidebar_section_split);
+    let detail_area = crate::ui::sidebar_regions_layout(app, app.view.sidebar_rect).agent_area;
     // Pre-existing label mismatch (broke hover==render on mx before the v0.7.4 merge): the
     // renderer still draws the SORT toggle label here (`render_agent_detail` →
     // `agent_panel_toggle_rect`), while the client toggles SCOPE on click. Hit/hover geometry
@@ -3292,15 +3367,47 @@ fn collapsed_hit_test(
     None
 }
 
+fn agent_route_index_at_row(
+    snapshot: &ClientSidebarSnapshot,
+    body: Rect,
+    row: u16,
+) -> Option<usize> {
+    let detail_area =
+        crate::ui::sidebar_regions_layout(&snapshot.app, snapshot.app.view.sidebar_rect).agent_area;
+    let metrics = crate::ui::agent_panel_scroll_metrics(&snapshot.app, detail_area);
+    let scroll = snapshot.app.agent_panel_scroll.min(metrics.max_offset_from_bottom);
+    let entries = crate::ui::agent_panel_entries(&snapshot.app);
+    let mut row_y = body.y;
+    let body_bottom = body.y.saturating_add(body.height);
+
+    for (route_idx, entry) in entries.iter().enumerate().skip(scroll) {
+        let height =
+            crate::ui::agent_entry_height_in_body(&snapshot.app, entry, body.height);
+        if row_y.saturating_add(height) > body_bottom {
+            break;
+        }
+        if row >= row_y && row < row_y.saturating_add(height) {
+            return snapshot.agent_routes.get(route_idx).map(|_| route_idx);
+        }
+        row_y = row_y
+            .saturating_add(height)
+            .saturating_add(crate::ui::agent_entry_gap(
+                &snapshot.app,
+                route_idx,
+                entries.len(),
+            ))
+            .min(body_bottom);
+    }
+    None
+}
+
 fn hit_test_agent_panel(
     snapshot: &ClientSidebarSnapshot,
     x: u16,
     y: u16,
 ) -> Option<SidebarHitTarget> {
-    let (_, detail_area) = crate::ui::expanded_sidebar_sections(
-        snapshot.app.view.sidebar_rect,
-        snapshot.app.sidebar_section_split,
-    );
+    let detail_area =
+        crate::ui::sidebar_regions_layout(&snapshot.app, snapshot.app.view.sidebar_rect).agent_area;
     let metrics = crate::ui::agent_panel_scroll_metrics(&snapshot.app, detail_area);
     let body =
         crate::ui::agent_panel_body_rect(detail_area, crate::ui::should_show_scrollbar(metrics));
@@ -3308,19 +3415,8 @@ fn hit_test_agent_panel(
         return None;
     }
 
-    let entry_rows = crate::ui::agent_panel_entry_row_count(&snapshot.app);
-    if entry_rows == 0 {
-        return None;
-    }
-    let relative_row = y.saturating_sub(body.y);
-    let stride = entry_rows.saturating_add(1);
-    let index = (relative_row / stride) as usize;
-    if relative_row % stride >= entry_rows {
-        return None;
-    }
-    let route = snapshot
-        .agent_routes
-        .get(snapshot.app.agent_panel_scroll.saturating_add(index))?;
+    let route_idx = agent_route_index_at_row(snapshot, body, y)?;
+    let route = &snapshot.agent_routes[route_idx];
     Some(SidebarHitTarget::Agent {
         server_id: route.server_id.clone(),
         agent_id: route.agent_id.clone(),
@@ -3338,10 +3434,8 @@ fn hover_test_agent_panel(
     x: u16,
     y: u16,
 ) -> Option<crate::app::state::SidebarHoverTarget> {
-    let (_, detail_area) = crate::ui::expanded_sidebar_sections(
-        snapshot.app.view.sidebar_rect,
-        snapshot.app.sidebar_section_split,
-    );
+    let detail_area =
+        crate::ui::sidebar_regions_layout(&snapshot.app, snapshot.app.view.sidebar_rect).agent_area;
     let metrics = crate::ui::agent_panel_scroll_metrics(&snapshot.app, detail_area);
     let body =
         crate::ui::agent_panel_body_rect(detail_area, crate::ui::should_show_scrollbar(metrics));
@@ -3349,19 +3443,7 @@ fn hover_test_agent_panel(
         return None;
     }
 
-    let entry_rows = crate::ui::agent_panel_entry_row_count(&snapshot.app);
-    if entry_rows == 0 {
-        return None;
-    }
-    let relative_row = y.saturating_sub(body.y);
-    let stride = entry_rows.saturating_add(1);
-    let index = (relative_row / stride) as usize;
-    if relative_row % stride >= entry_rows {
-        return None;
-    }
-    let route_idx = snapshot.app.agent_panel_scroll.saturating_add(index);
-    // only a real agent route resolves (the gap rows / over-scroll resolve to None).
-    snapshot.agent_routes.get(route_idx)?;
+    let route_idx = agent_route_index_at_row(snapshot, body, y)?;
     Some(crate::app::state::SidebarHoverTarget::AgentRoute { route_idx })
 }
 
@@ -3445,8 +3527,9 @@ fn compute_hover_geometry(snapshot: &ClientSidebarSnapshot) -> HoverGeometry {
         return geom;
     }
 
-    let (ws_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(app.view.sidebar_rect, app.sidebar_section_split);
+    let layout = crate::ui::sidebar_regions_layout(app, app.view.sidebar_rect);
+    let ws_area = layout.workspace_area;
+    let detail_area = layout.agent_area;
 
     // -- workspace cards: bg-fill `hover_bg`, suppressing selected / active / dragged (those bgs win
     // over hover in `render_workspace_list`). The fill is clipped to the list bottom, like the render.
@@ -3477,31 +3560,30 @@ fn compute_hover_geometry(snapshot: &ClientSidebarSnapshot) -> HoverGeometry {
         }
     }
 
-    // -- agent-panel rows: bg-fill `hover_bg`, suppressing the active row (its `surface_dim` wins).
-    // Geometry mirrors `hover_test_agent_panel`: stride = entry_rows + 1, row `i` at body.y+i*stride.
+    // -- agent-panel rows: use the exact per-entry heights and gaps used by `render_agent_detail`.
     let metrics = crate::ui::agent_panel_scroll_metrics(app, detail_area);
     let body =
         crate::ui::agent_panel_body_rect(detail_area, crate::ui::should_show_scrollbar(metrics));
-    let entry_rows = crate::ui::agent_panel_entry_row_count(app);
-    if body.width > 0 && body.height > 0 && entry_rows > 0 {
-        let stride = entry_rows.saturating_add(1);
+    if body.width > 0 && body.height > 0 {
         let body_bottom = body.y.saturating_add(body.height);
         let entries = crate::ui::agent_panel_entries(app);
-        for (route_idx, entry) in entries.iter().enumerate().skip(app.agent_panel_scroll) {
-            let local = (route_idx - app.agent_panel_scroll) as u16;
-            let row_y = body.y.saturating_add(local.saturating_mul(stride));
-            if row_y.saturating_add(entry_rows) > body_bottom {
+        let scroll = app.agent_panel_scroll.min(metrics.max_offset_from_bottom);
+        let mut row_y = body.y;
+        for (route_idx, entry) in entries.iter().enumerate().skip(scroll) {
+            let height = crate::ui::agent_entry_height_in_body(app, entry, body.height);
+            if row_y.saturating_add(height) > body_bottom {
                 break;
             }
-            // only a real agent route resolves (matches `hover_test_agent_panel`).
-            if snapshot.agent_routes.get(route_idx).is_none() {
-                continue;
+            if snapshot.agent_routes.get(route_idx).is_some()
+                && !app.is_active_pane(entry.ws_idx, entry.tab_idx, entry.pane_id)
+            {
+                geom.agent_rows
+                    .push((route_idx, Rect::new(body.x, row_y, body.width, height)));
             }
-            if app.is_active_pane(entry.ws_idx, entry.tab_idx, entry.pane_id) {
-                continue;
-            }
-            geom.agent_rows
-                .push((route_idx, Rect::new(body.x, row_y, body.width, entry_rows)));
+            row_y = row_y
+                .saturating_add(height)
+                .saturating_add(crate::ui::agent_entry_gap(app, route_idx, entries.len()))
+                .min(body_bottom);
         }
     }
 
@@ -4390,6 +4472,91 @@ mod tests {
         assert_eq!(compositor.agent_panel_scroll, 0);
     }
 
+    #[test]
+    fn agent_hit_test_follows_variable_rendered_entry_heights() {
+        let mut model = single_server_two_ws_model();
+        let mut settings = model.ui_settings().clone();
+        settings.sidebar_agents.rows_by_agent.insert(
+            "pi".into(),
+            vec![vec![crate::config::AgentSidebarToken::Agent]; 8],
+        );
+        settings.sidebar_agents.rows_by_agent.insert(
+            "claude".into(),
+            vec![vec![crate::config::AgentSidebarToken::Agent]],
+        );
+        settings.sidebar_agents.rows_by_agent.insert(
+            "codex".into(),
+            vec![
+                vec![crate::config::AgentSidebarToken::Workspace],
+                vec![crate::config::AgentSidebarToken::Agent],
+                vec![crate::config::AgentSidebarToken::StateText],
+            ],
+        );
+        settings.sidebar_sections = vec![crate::config::CustomSidebarSectionConfig {
+            id: "usage".into(),
+            title: Some("Usage".into()),
+            max_rows: 8,
+            placement: crate::config::SidebarSectionPlacement::BelowAgents,
+            highlight_token: None,
+        }];
+        settings.sidebar_section_reports.insert(
+            "usage".into(),
+            vec![crate::api::schema::SectionRow::Spans {
+                spans: vec![crate::api::schema::SectionSpan {
+                    text: "usage".into(),
+                    color: None,
+                    bold: false,
+                    dim: false,
+                }],
+                wrap: false,
+                right: Vec::new(),
+            }],
+        );
+        model.set_ui_settings(settings);
+
+        let compositor = ClientCompositor::new(26);
+        let snapshot =
+            ClientSidebarSnapshot::from_model(&model, &compositor, 26, 60, 28, Instant::now());
+        let layout =
+            crate::ui::sidebar_regions_layout(&snapshot.app, snapshot.app.view.sidebar_rect);
+        let detail_area = layout.agent_area;
+        let metrics = crate::ui::agent_panel_scroll_metrics(&snapshot.app, detail_area);
+        let body =
+            crate::ui::agent_panel_body_rect(detail_area, crate::ui::should_show_scrollbar(metrics));
+        let entries = crate::ui::agent_panel_entries(&snapshot.app);
+        assert_eq!(entries.len(), 2);
+        let second_row = body
+            .y
+            .saturating_add(crate::ui::agent_entry_height_in_body(
+                &snapshot.app,
+                &entries[0],
+                body.height,
+            ))
+            .saturating_add(crate::ui::agent_entry_gap(&snapshot.app, 0, entries.len()));
+
+        assert_eq!(
+            compositor.hit_test(&model, body.x, second_row, 60, 28),
+            Some(SidebarHitTarget::Agent {
+                server_id: ServerId::main(),
+                agent_id: "agent-2".into(),
+            })
+        );
+        assert_eq!(
+            compositor.hover_test(&model, body.x, second_row, 60, 28),
+            Some(crate::app::state::SidebarHoverTarget::AgentRoute { route_idx: 1 })
+        );
+        assert_eq!(
+            compositor.hit_test(&model, body.x, layout.sections_area.y, 60, 28),
+            None,
+            "the Usage/API region must never route to an agent"
+        );
+        assert_eq!(
+            compositor.hover_test(&model, body.x, layout.sections_area.y, 60, 28),
+            None,
+            "the Usage/API region must never receive an agent hover rectangle"
+        );
+    }
+
     // #20: under `CurrentWorkspace` scope, the agent panel only renders the active workspace's
     // agents, and the flat `agent_routes` stays aligned so an agent-row hit resolves correctly.
     #[test]
@@ -4498,14 +4665,31 @@ mod tests {
         use crossterm::event::{KeyModifiers, MouseButton, MouseEventKind};
         let model = single_server_two_ws_model();
         let mut compositor = ClientCompositor::new(26);
+        compositor.sections_height = Some(8);
+        let mut model = model;
+        let mut settings = model.ui_settings().clone();
+        settings.sidebar_sections = vec![crate::config::CustomSidebarSectionConfig {
+            id: "usage".into(),
+            title: Some("Usage".into()),
+            max_rows: 12,
+            placement: crate::config::SidebarSectionPlacement::BelowAgents,
+            highlight_token: None,
+        }];
+        settings.sidebar_section_reports.insert(
+            "usage".into(),
+            vec![crate::api::schema::SectionRow::Spans {
+                spans: vec![],
+                wrap: false,
+                right: vec![],
+            }],
+        );
+        model.set_ui_settings(settings);
         assert!(compositor.section_split.is_none());
 
         let snapshot =
             ClientSidebarSnapshot::from_model(&model, &compositor, 26, 60, 28, Instant::now());
-        let divider = crate::ui::sidebar_section_divider_rect(
-            snapshot.app.view.sidebar_rect,
-            snapshot.app.sidebar_section_split,
-        );
+        let divider =
+            crate::ui::spaces_agents_divider_rect(&snapshot.app, snapshot.app.view.sidebar_rect);
         assert!(divider.width > 0, "the section divider should be drawn");
 
         let ev = |kind, row| crossterm::event::MouseEvent {
@@ -4524,7 +4708,19 @@ mod tests {
             ),
             Some(true)
         );
-        let after_press = compositor.section_split.expect("press sets a split");
+        let pressed_snapshot =
+            ClientSidebarSnapshot::from_model(&model, &compositor, 26, 60, 28, Instant::now());
+        let pressed_divider = crate::ui::spaces_agents_divider_rect(
+            &pressed_snapshot.app,
+            pressed_snapshot.app.view.sidebar_rect,
+        );
+        assert_eq!(
+            pressed_divider.y, divider.y,
+            "grabbing the rendered divider must not move it"
+        );
+        let before_drag = compositor
+            .section_split
+            .expect("press sets the original host split");
         assert_eq!(
             compositor.handle_sidebar_section_divider_mouse(
                 &model,
@@ -4536,8 +4732,8 @@ mod tests {
         );
         let after_drag = compositor.section_split.expect("drag keeps a split");
         assert!(
-            after_drag > after_press,
-            "dragging down increases the workspace ratio ({after_press} -> {after_drag})"
+            after_drag > before_drag,
+            "dragging down increases the workspace ratio ({before_drag} -> {after_drag})"
         );
 
         // Release ends the drag; a later drag with no active drag is ignored.
@@ -6580,9 +6776,9 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_wants_animation_true_with_working_agent() {
+    fn sidebar_animation_clock_stays_off_for_working_agents() {
         let (model, _) = model_with_agent_status("working");
-        assert!(sidebar_wants_animation(&model));
+        assert!(!sidebar_wants_animation(&model));
     }
 
     /// Force the host-banner animation off so a test can isolate the agent-driven animation
@@ -6608,19 +6804,10 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_wants_animation_true_with_banner() {
-        // item 2 (C3): the banner hook is now the real gate. With no working agent the gate is
-        // driven solely by `host_banner_animation_active` — a visible Secondary with the default
-        // Animated setting makes the gate true (proving the banner hook is the single
-        // banner-active input the gate reads).
+    fn sidebar_animation_clock_stays_off_for_animated_banners() {
         let (model, _) = model_with_agent_status("idle");
         assert!(model.host_banner_animation_active());
-        assert!(sidebar_wants_animation(&model));
-        assert_eq!(
-            sidebar_wants_animation(&model),
-            model.host_banner_animation_active(),
-            "with no working agent the gate equals the banner hook"
-        );
+        assert!(!sidebar_wants_animation(&model));
     }
 
     #[test]

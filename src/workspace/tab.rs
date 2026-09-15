@@ -576,7 +576,7 @@ impl Tab {
         let terminal_id = self.terminal_id(pane_id)?;
         terminal_runtimes
             .get(terminal_id)
-            .and_then(|rt| rt.cwd())
+            .and_then(|runtime| runtime.foreground_cwd().or_else(|| runtime.cwd()))
             .or_else(|| {
                 terminals
                     .get(terminal_id)

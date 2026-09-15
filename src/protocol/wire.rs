@@ -1619,6 +1619,13 @@ mod tests {
             }),
             17
         );
+        assert_eq!(
+            tag(&ClientMessage::SessionEnv {
+                tokens: Vec::new(),
+                env: Vec::new(),
+            }),
+            18
+        );
     }
 
     /// `TerminalSessionMode` is nested inside `RetargetTerminal`, so its ordinals are wire too and

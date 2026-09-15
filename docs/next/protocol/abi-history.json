@@ -43,12 +43,23 @@
       "protocol_version": 21,
       "wire_abi_epoch": 3,
       "schema_fingerprint": "14e847ff6ae1d9f2",
-      "fixtures": "fixtures.json",
-      "fixtures_sha256": null,
-      "accepted_by_current_server": true,
+      "fixtures": "fixtures/protocol-21-epoch-3.json",
+      "fixtures_sha256": "8a0d4be71805d2dbb5376f19b34d80b87c89256e8153b0a1c763134b926beea7",
+      "accepted_by_current_server": false,
       "decided_on": "2026-08-22",
       "decision": "ACCEPTED - this is the ABI this build speaks. Epoch 3 is the upstream v0.8.2 merge (133 commits, v0.8.0..v0.8.2). Upstream appended three ClientMessage variants (GraphicsTransmissionResult, InputPixels, GraphicsTransmissionStarted) and three ServerMessage variants (TerminalBell, GraphicsFile, GraphicsTransmissionRetired) at ITS enum tails, and inserted ClientLaunchMode::AppDirectGraphics between App and TerminalAttach; this fork moved AppDirectGraphics to the tail and placed upstream's six new variants after the mx variants, per the standing tail rule. Independent witness that the rule held: the `enums` block of docs/next/protocol/fixtures.json is byte-identical across the merge (ServerMessage::Terminal 13, ClientMessage::ObserveTerminal 12, RetargetTerminal 14, ClientLaunchMode::TerminalAttach 1), and client_message_wire_tags_preserve_protocol_15_order / server_message_wire_tags_preserve_protocol_20_order still pin every pre-existing tag. What DID change, and why the fingerprint had to move: the message set grew, and ServerMessage::MouseCapture gained a trailing sgr_pixels: bool (a payload change at an unmoved tag - the exact case fingerprint_changes_when_a_payload_field_is_added exists for). PROTOCOL_VERSION deliberately stays at 21: the handshake byte stream (28-byte prelude, Hello, Welcome) is unchanged, upstream is still on 20, and the version names the negotiation while the epoch names the byte layout.",
       "user_impact": "For a client and server from this build, nothing changes: the desktop TUI, herdr attach, the observe/terminal-ANSI stream and the JSON API all still put the same bytes on the wire for every message that existed before the merge. One observable change is not an ABI change but a size change, and it lands on the mobile observe path: upstream's 'compact large terminal redraws' (#2675, 36074530) rewrote write_all_cells (src/protocol/render_ansi.rs:639) to elide the per-cell cursor move when the next cell is inline and to re-emit SGR only when the style actually changes. That function is not fixture-only - it is the single encoder on the live observe path: src/server/render_stream.rs:101 (PreparedRender::TerminalAnsi) calls BlitEncoder::encode, whose full-redraw arm is src/protocol/render_ansi.rs:483 write_all_cells, and the bytes it returns become ServerMessage::Terminal verbatim (src/server/render_stream.rs:114-121). Measured at 100x30 on this tree AFTER the merge: 3,276 bytes live (tests/observe_terminal_ansi.rs, 2 consecutive runs) and 3,274 from the TypeScript client over both a direct socket and the ssh bridge, against 3,292 for the synthesized fixture; the pre-merge numbers were 55,925 live and 55,921 in the fixture. So a full frame on the phone is ~17x cheaper, which retires the 'marshal a ~56 KB frame across the React Native bridge' cost that mobile/.prd/03-blockers.md B13 was written against - that blocker's measurements are now stale and its mitigation (reduce full-frame FREQUENCY via RetargetTerminal) is no longer load-bearing for size alone. A client built at epoch 2 or earlier cannot connect to this server and vice versa; that refusal is the epoch-2 row above and lands on the same already-built recovery path as any PROTOCOL_VERSION bump."
+    },
+    {
+      "protocol_version": 21,
+      "wire_abi_epoch": 4,
+      "schema_fingerprint": "9568c9ebf5088283",
+      "fixtures": "fixtures.json",
+      "fixtures_sha256": null,
+      "accepted_by_current_server": true,
+      "decided_on": "2026-08-26",
+      "decision": "ACCEPTED - this is the ABI this build speaks. Epoch 4 appends ClientMessage::SessionEnv at tag 18 so a remote client can forward connection-scoped tokens and environment without changing any existing message tag or payload. Epoch 3 is rejected because compatibility checks are symmetric: an epoch-3 client is safe against this server, but an epoch-4 client may send tag 18 to an epoch-3 server, which cannot decode it.",
+      "user_impact": "Client and server must come from the same epoch-4 build. Older epoch-3 peers are refused by the wire prelude with an explicit incompatible-ABI error instead of failing later while decoding SessionEnv. Existing message bytes and tags 0 through 17 remain unchanged."
     }
   ]
 }

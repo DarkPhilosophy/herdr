@@ -688,6 +688,7 @@ mod tests {
             agent_panel_scope: crate::app::state::AgentPanelScope::CurrentWorkspace,
             sidebar_width: Some(26),
             sidebar_section_split: Some(0.5),
+            sidebar_sections_height: None,
             collapsed_space_keys: std::collections::HashSet::new(),
             remote_registry: crate::remote_registry::RemoteRegistrySnapshot {
                 remotes: vec![crate::remote_registry::RemoteDefinitionSnapshot {

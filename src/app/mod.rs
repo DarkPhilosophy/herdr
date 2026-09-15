@@ -1679,6 +1679,7 @@ impl App {
                 self.state.sidebar_space = config.ui.sidebar.spaces.clone();
                 self.state.sidebar_agent = config.ui.sidebar.agents.clone();
                 self.state.sidebar_host = config.ui.sidebar.host.clone();
+                self.request_git_identity_refresh(Instant::now());
                 self.state.accent = crate::config::parse_color(&config.ui.accent);
                 if !self.state.local_sound_playback && self.state.sound != config.ui.sound {
                     self.state.request_client_config_reload = true;
@@ -4124,6 +4125,7 @@ placement = "below_agents"
                     ),
                 ],
             ],
+            ..Default::default()
         };
 
         app.save_sidebar_agent_preferences(original_agent.clone());

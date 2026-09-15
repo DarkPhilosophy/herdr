@@ -177,11 +177,12 @@ fn toast_delivery_for_index(idx: usize) -> ToastDelivery {
 /// item 2 (C3): the host group exposes a fixed option list (gradient/animation/speed/glyph/
 /// show_count). It does NOT use the `lines` model.
 const SIDEBAR_HOST_OPTION_COUNT: usize = 5;
+const MAX_SIDEBAR_CARD_GAP: u16 = 5;
 
 fn sidebar_config_row_count(group: SidebarConfigGroup) -> usize {
     match group {
-        SidebarConfigGroup::Spaces => SIDEBAR_SPACE_ITEMS.len(),
-        SidebarConfigGroup::Agents => SIDEBAR_AGENT_ITEMS.len(),
+        SidebarConfigGroup::Spaces => SIDEBAR_SPACE_ITEMS.len() + 1,
+        SidebarConfigGroup::Agents => SIDEBAR_AGENT_ITEMS.len() + 1,
         SidebarConfigGroup::Host => SIDEBAR_HOST_OPTION_COUNT,
     }
 }
@@ -222,6 +223,7 @@ fn sidebar_config_row_offsets(state: &AppState) -> Vec<(usize, u16)> {
                     offset += 1;
                 }
             }
+            rows.push((SIDEBAR_SPACE_ITEMS.len(), offset));
         }
         SidebarConfigGroup::Agents => {
             let ordered = ordered_sidebar_agent_items(&state.sidebar_agent);
@@ -241,6 +243,7 @@ fn sidebar_config_row_offsets(state: &AppState) -> Vec<(usize, u16)> {
                     offset += 1;
                 }
             }
+            rows.push((SIDEBAR_AGENT_ITEMS.len(), offset));
         }
         // item 2: host group has no reorderable rows (C3 fills behavior).
         SidebarConfigGroup::Host => {}
@@ -373,11 +376,15 @@ fn move_sidebar_agent_item_to_line(
 fn toggle_sidebar_config_item(state: &mut AppState) -> Option<SettingsAction> {
     match state.settings.sidebar_config_group {
         SidebarConfigGroup::Spaces => {
-            let item = selected_sidebar_space_item(state)?;
             let previous = state.sidebar_space.clone();
             let mut preferences = previous.clone();
-            let enabled = !item.enabled(&preferences);
-            item.set_enabled(&mut preferences, enabled);
+            if state.settings.list.selected == SIDEBAR_SPACE_ITEMS.len() {
+                preferences.row_gap = (preferences.row_gap + 1) % (MAX_SIDEBAR_CARD_GAP + 1);
+            } else {
+                let item = selected_sidebar_space_item(state)?;
+                let enabled = !item.enabled(&preferences);
+                item.set_enabled(&mut preferences, enabled);
+            }
             state.sidebar_space = preferences.clone();
             Some(SettingsAction::SaveSidebarSpace {
                 previous,
@@ -385,11 +392,15 @@ fn toggle_sidebar_config_item(state: &mut AppState) -> Option<SettingsAction> {
             })
         }
         SidebarConfigGroup::Agents => {
-            let item = selected_sidebar_agent_item(state)?;
             let previous = state.sidebar_agent.clone();
             let mut preferences = previous.clone();
-            let enabled = !item.enabled(&preferences);
-            item.set_enabled(&mut preferences, enabled);
+            if state.settings.list.selected == SIDEBAR_AGENT_ITEMS.len() {
+                preferences.row_gap = (preferences.row_gap + 1) % (MAX_SIDEBAR_CARD_GAP + 1);
+            } else {
+                let item = selected_sidebar_agent_item(state)?;
+                let enabled = !item.enabled(&preferences);
+                item.set_enabled(&mut preferences, enabled);
+            }
             state.sidebar_agent = preferences.clone();
             Some(SettingsAction::SaveSidebarAgent {
                 previous,
@@ -1255,7 +1266,10 @@ mod tests {
         let popup = state.settings_popup_rect();
 
         assert_eq!(popup.width, crate::ui::SETTINGS_POPUP_WIDTH);
-        assert_eq!(popup.height, crate::ui::settings_popup_height(&state));
+        assert_eq!(
+            popup.height,
+            crate::ui::settings_popup_height(&state, state.screen_rect())
+        );
     }
 
     #[test]
@@ -1341,6 +1355,43 @@ mod tests {
         );
         assert_eq!(state.sidebar_space, expected);
         assert_eq!(state.mode, Mode::Settings);
+    }
+
+    #[test]
+    fn settings_sidebar_config_cycles_independent_space_and_agent_gaps() {
+        let mut state = state_with_workspaces(&["test"]);
+        open_settings_at(&mut state, SettingsSection::Sidebar);
+        state.settings.list.selected = SIDEBAR_SPACE_ITEMS.len();
+
+        let previous_spaces = state.sidebar_space.clone();
+        let spaces_action = update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty()),
+        );
+        assert_eq!(state.sidebar_space.row_gap, 1);
+        assert_eq!(
+            spaces_action,
+            Some(SettingsAction::SaveSidebarSpace {
+                previous: previous_spaces,
+                preferences: state.sidebar_space.clone(),
+            })
+        );
+
+        state.settings.sidebar_config_group = SidebarConfigGroup::Agents;
+        state.settings.list.selected = SIDEBAR_AGENT_ITEMS.len();
+        let previous_agents = state.sidebar_agent.clone();
+        let agents_action = update_settings_state(
+            &mut state,
+            KeyEvent::new(KeyCode::Char(' '), KeyModifiers::empty()),
+        );
+        assert_eq!(state.sidebar_agent.row_gap, 1);
+        assert_eq!(
+            agents_action,
+            Some(SettingsAction::SaveSidebarAgent {
+                previous: previous_agents,
+                preferences: state.sidebar_agent.clone(),
+            })
+        );
     }
 
     #[test]

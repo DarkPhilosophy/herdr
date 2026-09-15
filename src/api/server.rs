@@ -386,6 +386,7 @@ fn api_method_name(method: &Method) -> &'static str {
         Method::ServerLiveHandoff(_) => "server.live_handoff",
         Method::ServerReloadConfig(_) => "server.reload_config",
         Method::ServerUiSettings(_) => "server.ui_settings",
+        Method::ServerSetSidebarLayout(_) => "server.set_sidebar_layout",
         Method::ServerAgentManifests(_) => "server.agent_manifests",
         Method::ServerReloadAgentManifests(_) => "server.reload_agent_manifests",
         Method::RemoteList(_) => "remote.list",

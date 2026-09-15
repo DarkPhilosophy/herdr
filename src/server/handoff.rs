@@ -485,6 +485,7 @@ mod tests {
             agent_panel_scope: Default::default(),
             sidebar_width: None,
             sidebar_section_split: None,
+            sidebar_sections_height: None,
             collapsed_space_keys: Default::default(),
             remote_registry: Default::default(),
             pane_id_aliases: Default::default(),

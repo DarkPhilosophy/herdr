@@ -24,7 +24,12 @@ pub(super) fn unique_test_dir() -> PathBuf {
 }
 
 pub(super) fn managed_github_plugin_dir(config_home: &Path) -> PathBuf {
-    config_home.join("herdr-dev").join("plugins").join("github")
+    let app_dir = if cfg!(debug_assertions) {
+        "herdr-dev"
+    } else {
+        "herdr"
+    };
+    config_home.join(app_dir).join("plugins").join("github")
 }
 
 pub(super) fn path_missing_or_empty(path: &Path) -> bool {

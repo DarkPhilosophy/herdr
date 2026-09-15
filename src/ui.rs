@@ -54,8 +54,6 @@ pub(crate) use self::scrollbar::{
     scrollbar_offset_from_row, scrollbar_thumb_grab_offset, should_show_scrollbar,
 };
 use self::settings::render_settings_overlay;
-#[cfg(test)]
-pub(crate) use self::sidebar::{expanded_sidebar_sections, sidebar_section_divider_rect};
 pub(crate) use self::sidebar::{render_sidebar, render_sidebar_collapsed};
 use self::status::{
     copy_feedback_rect, render_config_diagnostic, render_copy_feedback, render_toast_notification,
@@ -91,7 +89,7 @@ pub(crate) use self::{
     },
     settings::{
         settings_button_rects, settings_popup_height, settings_popup_width,
-        settings_show_primary_action,
+        settings_show_primary_action, SETTINGS_POPUP_WIDTH,
     },
     sidebar::{
         agent_entry_gap, agent_entry_height_in_body, agent_panel_body_rect, agent_panel_entries,
@@ -119,7 +117,7 @@ pub(crate) use self::{
         add_remote_inner_rect, client_menu_inner_rect_at, new_workspace_picker_inner_rect,
         remote_manage_inner_rect,
     },
-    sidebar::{host_drop_indicator_row, workspace_drop_indicator_row},
+    sidebar::host_drop_indicator_row,
 };
 pub(crate) use self::{
     keybind_help::keybind_help_lines,

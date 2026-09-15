@@ -4,26 +4,24 @@
     "accepted_peer_abis": [
       {
         "protocol_version": 21,
-        "schema_fingerprint": "9568c9ebf5088283",
-        "wire_abi_epoch": 4
+        "schema_fingerprint": "14e847ff6ae1d9f2",
+        "wire_abi_epoch": 3
       }
     ],
     "fork": "herdr-mx",
     "note": "Tags are fork-local; see mobile/.prd/03-blockers.md B1. PROTOCOL_VERSION is NOT a layout identifier — herdr-mx and upstream both shipped 20 with different tags — so the layout identity is (fork, wire_abi_epoch, schema_fingerprint), announced in the `wire_abi_prelude` vector below and checked before any bincode is decoded. `accepted_peer_abis` is the compatibility window (M0-b): an explicit table, not a version range. Its history and the decision behind every row is docs/next/protocol/abi-history.json.",
     "prelude_len": 28,
-    "schema_fingerprint": "9568c9ebf5088283",
-    "wire_abi_epoch": 4
+    "schema_fingerprint": "14e847ff6ae1d9f2",
+    "wire_abi_epoch": 3
   },
   "enums": {
     "ClientLaunchMode": [
       "App",
-      "TerminalAttach",
-      "AppDirectGraphics"
+      "TerminalAttach"
     ],
     "ClientMessage": {
       "ObserveTerminal": 12,
-      "RetargetTerminal": 14,
-      "SessionEnv": 18
+      "RetargetTerminal": 14
     },
     "RenderEncoding": [
       "SemanticFrame",
@@ -185,13 +183,13 @@
         "schema_fingerprint"
       ],
       "fields": {
-        "abi_epoch": 4,
+        "abi_epoch": 3,
         "fork": "herdr-mx",
         "magic": "HRDR",
         "protocol_version": 21,
-        "schema_fingerprint": "9568c9ebf5088283"
+        "schema_fingerprint": "14e847ff6ae1d9f2"
       },
-      "framed_hex": "4852445268657264722d6d7804000000150000009568c9ebf5088283",
+      "framed_hex": "4852445268657264722d6d78030000001500000014e847ff6ae1d9f2",
       "message": "WirePrelude",
       "name": "wire_abi_prelude",
       "note": "NOT bincode and NOT length-prefixed: a fixed 28-byte block, magic(4) + fork(8) + abi_epoch(u32LE) + protocol_version(u32LE) + schema_fingerprint(8), written before the first framed message by BOTH peers. It sits ahead of every bincode decode on purpose — the first value the forks disagree on (ClientLaunchMode) is a FIELD OF Hello, and the side that decodes Hello is the server, so a fingerprint carried in Welcome would arrive after the mis-parse it was meant to prevent. The magic reads as u32LE 1380208712, above both frame caps, so it can never collide with a legacy peer's length prefix (src/protocol/abi.rs). A peer that sends no prelude is rejected, not guessed at."
@@ -228,21 +226,6 @@
       "message": "RetargetTerminal",
       "name": "retarget_terminal_control",
       "note": "`Control { takeover }` is a tag byte followed by the bool, so this frame is exactly one byte longer than retarget_terminal_observe. ⚠️ Control RESIZES the shared PTY to this client's Hello grid and takes its lock (attach_terminal_client) — a phone that declares its own screen size here reshapes a desktop pane. The mobile contract is to hold it across one input and retarget straight back to Observe, which restores the grid recorded at promotion (release_terminal_control)."
-    },
-    {
-      "direction": "client_to_server",
-      "field_order": [
-        "tokens",
-        "env"
-      ],
-      "fields": {
-        "env": [],
-        "tokens": []
-      },
-      "framed_hex": "03000000120000",
-      "message": "SessionEnv",
-      "name": "session_env_empty",
-      "note": "SessionEnv is appended at ClientMessage tag 18. Empty collections pin the tag and field order without placing credentials or environment values in the fixture corpus. Values are connection-scoped and purged when the client disconnects."
     }
   ]
 }

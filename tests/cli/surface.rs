@@ -181,7 +181,12 @@ fn pane_report_metadata_sends_presentation_request() {
         request["params"]["state_labels"]["working"],
         "deep in the mines"
     );
-    assert_eq!(request["params"]["tokens"]["summary"], "reviewing auth");
+    assert_eq!(
+        request["params"]["tokens"]["summary"],
+        "reviewing auth",
+        "{request}; stderr={}",
+        String::from_utf8_lossy(&run.stderr)
+    );
     assert_eq!(request["params"]["tokens"]["model"], "opus");
     assert!(request["params"]["tokens"]["old"].is_null());
     assert_eq!(request["params"]["ttl_ms"], 3_600_000);

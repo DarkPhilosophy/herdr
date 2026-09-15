@@ -1,3 +1,5 @@
+mod tokens;
+
 use std::{collections::HashMap, time::Duration};
 
 use ratatui::{
@@ -8,8 +10,10 @@ use ratatui::{
     Frame,
 };
 
+use self::tokens::{ResolvedToken, ResolvedTokenKind, SpaceTokenContext};
 use super::scrollbar::{render_scrollbar, should_show_scrollbar};
 use super::status::{agent_icon, state_icon, state_label, state_label_color};
+use super::text::{display_width, display_width_u16, truncate_end};
 use crate::app::state::{
     ordered_sidebar_space_items, AgentPanelScope, AgentPanelSort, Palette, SidebarAgentItem,
     SidebarLine, SidebarSpaceItem,
@@ -32,6 +36,9 @@ pub(crate) struct AgentPanelEntry {
     pub primary_tab_label: Option<String>,
     pub agent_label: Option<String>,
     pub agent_kind_label: Option<String>,
+    pub terminal_title: Option<String>,
+    pub terminal_title_stripped: Option<String>,
+    pub agent: Option<crate::detect::Agent>,
     pub state: AgentState,
     pub seen: bool,
     pub state_entered_at: Option<std::time::Instant>,
@@ -237,8 +244,11 @@ fn collect_agent_panel_entries_with_runtimes(
                         },
                         primary_tab_label: (has_pane_label && multi_tab)
                             .then_some(detail.tab_label),
+                        terminal_title: detail.terminal_title,
+                        terminal_title_stripped: detail.terminal_title_stripped,
                         agent_label: Some(detail.agent_label),
                         agent_kind_label: detail.agent_kind_label,
+                        agent: detail.agent,
                         state: detail.state,
                         seen: detail.seen,
                         state_entered_at: detail.state_entered_at,
@@ -268,10 +278,15 @@ fn collect_agent_panel_entries_with_runtimes(
                         pane_label: detail.pane_label,
                         primary_label: workspace_label.clone(),
                         primary_tab_label: multi_tab.then_some(detail.tab_label),
+                        terminal_title: detail.terminal_title,
+                        terminal_title_stripped: detail.terminal_title_stripped,
                         agent_label: Some(detail.agent_label),
                         agent_kind_label: detail.agent_kind_label,
+                        agent: detail.agent,
                         state: detail.state,
                         seen: detail.seen,
+                        state_entered_at: detail.state_entered_at,
+                        work_started_at: detail.work_started_at,
                         last_agent_state_change_seq: detail.last_agent_state_change_seq,
                         custom_status: detail.tokens.get("status").cloned(),
                         state_labels: detail.state_labels,
@@ -883,6 +898,40 @@ fn workspace_line_has_content(
         .any(|item| sidebar_space_item_has_content(app, ws, item))
 }
 
+fn use_legacy_space_lines(app: &AppState) -> bool {
+    let default = crate::config::SidebarSpacesConfig::default();
+    app.sidebar_spaces == default || app.sidebar_space.lines != default.lines
+}
+
+fn resolved_space_rows(
+    app: &AppState,
+    ws: &crate::workspace::Workspace,
+    indented: bool,
+) -> Vec<Vec<ResolvedToken>> {
+    let (state, seen) = ws.aggregate_state(&app.terminals);
+    let label = if indented {
+        grouped_child_display_label(
+            &ws.display_name_from_terminals(&app.terminals),
+            ws.branch().as_deref(),
+            ws.custom_name.is_some(),
+        )
+    } else {
+        ws.display_name_from_terminals(&app.terminals)
+    };
+    let token_values = ws.metadata_tokens.values();
+    tokens::space_rows(
+        &app.sidebar_spaces,
+        SpaceTokenContext {
+            workspace: &label,
+            branch: ws.branch().as_deref(),
+            state_text: state_label(state, seen),
+            ahead_behind: ws.git_ahead_behind(),
+            tokens: &token_values,
+            suppress_git_details: indented,
+        },
+    )
+}
+
 fn workspace_render_lines(app: &AppState, ws: &crate::workspace::Workspace) -> Vec<SidebarLine> {
     let mut lines = Vec::new();
     for line in (0..app.sidebar_space.lines.len().max(1)).map(SidebarLine::from_index) {
@@ -899,8 +948,21 @@ fn workspace_render_lines(app: &AppState, ws: &crate::workspace::Workspace) -> V
     lines
 }
 
+fn workspace_row_height_for_entry(
+    app: &AppState,
+    ws: &crate::workspace::Workspace,
+    indented: bool,
+) -> u16 {
+    let rows = if use_legacy_space_lines(app) {
+        workspace_render_lines(app, ws).len()
+    } else {
+        resolved_space_rows(app, ws, indented).len().max(1)
+    };
+    rows.min(u16::MAX as usize) as u16
+}
+
 fn workspace_row_height(app: &AppState, ws: &crate::workspace::Workspace) -> u16 {
-    workspace_render_lines(app, ws).len() as u16
+    workspace_row_height_for_entry(app, ws, false)
 }
 
 fn workspace_attention_priority(state: AgentState, seen: bool) -> u8 {
@@ -1187,7 +1249,6 @@ fn insert_local_remote_divider(
     with_divider
 }
 
-#[cfg(test)]
 pub(crate) fn workspace_list_rect(area: Rect, split_ratio: f32) -> Rect {
     let (ws_area, _) = expanded_sidebar_sections(area, split_ratio);
     ws_area
@@ -1220,15 +1281,16 @@ fn workspace_list_visible_count(app: &AppState, area: Rect, scroll: usize) -> us
                 let Some(ws) = app.workspaces.get(*ws_idx) else {
                     continue;
                 };
-                let row_height = if *indented {
-                    1
-                } else {
-                    workspace_row_height(app, ws)
-                };
+                let row_height = workspace_row_height_for_entry(app, ws, *indented)
+                    .min(body.height.saturating_sub(used_rows));
+                if row_height == 0 {
+                    break;
+                }
                 // Upstream 7db744ab: worktree parents and children stay PACKED — no gap
                 // whenever the next entry is an indented child (parent->first child and
                 // child->child alike); the gap returns after the group's last member.
-                let gap = u16::from(!next_entry_is_indented_workspace(&entries, entry_idx));
+                let gap = u16::from(!next_entry_is_indented_workspace(&entries, entry_idx))
+                    .min(body.height.saturating_sub(used_rows).saturating_sub(row_height));
                 row_height.saturating_add(gap)
             }
             // item 4 / item 2: each non-selectable layout row consumes exactly one row.
@@ -1348,82 +1410,114 @@ fn agent_state_display_label(app: &AppState, entry: &AgentPanelEntry) -> String 
     }
 }
 
+fn use_legacy_agent_lines(app: &AppState) -> bool {
+    let default = crate::config::SidebarAgentsConfig::default();
+    app.sidebar_agents == default || app.sidebar_agent.lines != default.lines
+}
+
 pub(crate) fn agent_entry_height_in_body(
     app: &AppState,
     entry: &AgentPanelEntry,
     body_height: u16,
 ) -> u16 {
-    (resolved_agent_rows(app, entry)
-        .len()
-        .max(1)
-        .min(u16::MAX as usize) as u16)
-        .min(body_height)
+    let rows = if use_legacy_agent_lines(app) {
+        app.sidebar_agent.lines.len().max(1)
+    } else {
+        resolved_agent_rows(app, entry).len().max(1)
+    };
+    (rows.min(u16::MAX as usize) as u16).min(body_height)
 }
+pub(crate) fn agent_panel_entry_row_count(app: &AppState) -> u16 {
+    if use_legacy_agent_lines(app) {
+        return app.sidebar_agent.lines.len().max(1).min(u16::MAX as usize) as u16;
+    }
+    app.sidebar_agents
+        .rows_by_agent
+        .values()
+        .map(Vec::len)
+        .chain(std::iter::once(app.sidebar_agents.rows.len()))
+        .max()
+        .unwrap_or(1)
+        .max(1)
+        .min(u16::MAX as usize) as u16
+}
+
 
 pub(crate) fn agent_entry_gap(app: &AppState, entry_idx: usize, entry_count: usize) -> u16 {
-    if entry_idx + 1 < entry_count {
-        app.sidebar_agents.row_gap
-    } else {
-        0
+    if entry_idx + 1 >= entry_count {
+        return 0;
     }
-    lines
+    app.sidebar_agents.row_gap
 }
-
-pub(crate) fn agent_panel_entry_row_count(app: &AppState) -> u16 {
-    sidebar_agent_render_lines(app).len() as u16
-}
-
-fn agent_panel_visible_count(app: &AppState, area: Rect) -> usize {
+fn agent_panel_visible_count_from(app: &AppState, area: Rect, scroll: usize) -> usize {
     let body = agent_panel_body_rect(area, false);
-    let entry_rows = agent_panel_entry_row_count(app);
-    if body.width == 0 || entry_rows == 0 || body.height < entry_rows {
+    if body.width == 0 || body.height == 0 {
         return 0;
     }
 
     let mut used_rows = 0u16;
     let mut visible = 0usize;
-    while used_rows.saturating_add(entry_rows) <= body.height {
-        used_rows = used_rows.saturating_add(entry_rows);
-        visible += 1;
-        if used_rows < body.height {
-            used_rows = used_rows.saturating_add(1);
+    let entries = agent_panel_entries(app);
+    for (index, entry) in entries.iter().enumerate().skip(scroll) {
+        let height = agent_entry_height_in_body(app, entry, body.height);
+        if used_rows.saturating_add(height) > body.height {
+            break;
         }
+        used_rows = used_rows.saturating_add(height);
+        visible += 1;
+        used_rows = used_rows
+            .saturating_add(agent_entry_gap(app, index, entries.len()))
+            .min(body.height);
     }
     visible
 }
 
-/// Smallest scroll adjustment that brings agent-panel entry `target` into view, mirroring the
-/// upstream helper of the same name but computed against this fork's uniform entry-row geometry.
+fn agent_panel_bottom_start(app: &AppState, area: Rect) -> usize {
+    let body = agent_panel_body_rect(area, false);
+    let entries = agent_panel_entries(app);
+    let mut used_rows = 0u16;
+    let mut start = entries.len();
+    for (index, entry) in entries.iter().enumerate().rev() {
+        let gap = agent_entry_gap(app, index, entries.len());
+        let needed = agent_entry_height_in_body(app, entry, body.height).saturating_add(gap);
+        if used_rows.saturating_add(needed) > body.height {
+            break;
+        }
+        used_rows = used_rows.saturating_add(needed);
+        start = index;
+    }
+    start.min(entries.len().saturating_sub(1))
+}
+
 pub(crate) fn agent_panel_scroll_for_target(
     app: &AppState,
     area: Rect,
     current_scroll: usize,
     target: usize,
 ) -> usize {
-    let total = agent_panel_entries(app).len();
-    let visible = agent_panel_visible_count(app, area);
-    let max_scroll = total.saturating_sub(visible);
+    let max_scroll = agent_panel_bottom_start(app, area);
     if target < current_scroll {
         return target.min(max_scroll);
     }
     let mut scroll = current_scroll.min(max_scroll);
-    if visible > 0 && target >= scroll.saturating_add(visible) {
-        scroll = target.saturating_add(1).saturating_sub(visible);
+    while scroll < target {
+        let visible = agent_panel_visible_count_from(app, area, scroll);
+        if visible > 0 && target < scroll.saturating_add(visible) {
+            break;
+        }
+        scroll += 1;
     }
     scroll.min(max_scroll)
 }
 
 pub(crate) fn agent_panel_scroll_metrics(app: &AppState, area: Rect) -> crate::pane::ScrollMetrics {
-    let viewport_rows = agent_panel_visible_count(app, area);
-    let total_rows = agent_panel_entries(app).len();
-    let max_offset_from_bottom = total_rows.saturating_sub(viewport_rows);
-    let offset_from_bottom = total_rows
-        .saturating_sub(app.agent_panel_scroll)
-        .saturating_sub(viewport_rows);
+    let max_scroll = agent_panel_bottom_start(app, area);
+    let scroll = app.agent_panel_scroll.min(max_scroll);
+    let viewport_rows = agent_panel_visible_count_from(app, area, scroll);
 
     crate::pane::ScrollMetrics {
-        offset_from_bottom,
-        max_offset_from_bottom,
+        offset_from_bottom: max_scroll.saturating_sub(scroll),
+        max_offset_from_bottom: max_scroll,
         viewport_rows,
     }
 }
@@ -1485,16 +1579,17 @@ pub(crate) fn compute_workspace_list_areas_full(
                 let Some(ws) = app.workspaces.get(*ws_idx) else {
                     continue;
                 };
-                let row_height = if *indented {
-                    1
+                let available = body_bottom.saturating_sub(row_y);
+                let row_height = workspace_row_height_for_entry(app, ws, *indented).min(available);
+                // Keep worktree parents and children packed. Otherwise use the configured gap,
+                // whose default is zero, so ordinary cards are consecutive too.
+                let gap = if next_entry_is_indented_workspace(&entries, entry_idx) {
+                    0
                 } else {
-                    workspace_row_height(app, ws)
-                };
-                // Upstream 7db744ab: worktree parents and children stay PACKED — no gap
-                // whenever the next entry is an indented child (parent->first child and
-                // child->child alike); the gap returns after the group's last member.
-                let gap = u16::from(!next_entry_is_indented_workspace(&entries, entry_idx));
-                if row_y.saturating_add(row_height).saturating_add(gap) > body_bottom {
+                    app.sidebar_spaces.row_gap
+                }
+                .min(available.saturating_sub(row_height));
+                if row_height == 0 {
                     break;
                 }
                 cards.push(crate::app::state::WorkspaceCardArea {
@@ -1889,6 +1984,202 @@ pub(crate) fn render_sidebar(
     render_sidebar_toggle(app, frame, area, false, p);
 }
 
+fn resolved_token_spans(
+    resolved: &[ResolvedToken],
+    state_icon: (&str, Style),
+    state_text_style: Style,
+    workspace_style: Style,
+    secondary_style: Style,
+    custom_style: Style,
+    p: &Palette,
+    max_width: usize,
+) -> Vec<Span<'static>> {
+    let fixed_widths = resolved
+        .iter()
+        .map(|token| match &token.kind {
+            ResolvedTokenKind::StateIcon => display_width(state_icon.0),
+            ResolvedTokenKind::GitStatus { ahead, behind } => {
+                usize::from(*ahead > 0) * display_width(&format!("↑{ahead}"))
+                    + usize::from(*behind > 0) * display_width(&format!("↓{behind}"))
+                    + usize::from(*ahead > 0 && *behind > 0)
+            }
+            _ => 0,
+        })
+        .collect::<Vec<_>>();
+    let flexible_widths = resolved
+        .iter()
+        .map(|token| match &token.kind {
+            ResolvedTokenKind::StateText(text)
+            | ResolvedTokenKind::Workspace(text)
+            | ResolvedTokenKind::Tab(text)
+            | ResolvedTokenKind::Pane(text)
+            | ResolvedTokenKind::Agent(text)
+            | ResolvedTokenKind::TerminalTitle(text)
+            | ResolvedTokenKind::Branch(text)
+            | ResolvedTokenKind::Custom(text) => display_width(text),
+            _ => 0,
+        })
+        .collect::<Vec<_>>();
+    let minimum_width = |active: &[bool]| {
+        let indices = active
+            .iter()
+            .enumerate()
+            .filter_map(|(index, active)| active.then_some(index))
+            .collect::<Vec<_>>();
+        let content = indices
+            .iter()
+            .map(|index| fixed_widths[*index] + usize::from(flexible_widths[*index] > 0))
+            .sum::<usize>();
+        let separators = indices
+            .windows(2)
+            .map(|pair| display_width(tokens::separator(&resolved[pair[0]], &resolved[pair[1]])))
+            .sum::<usize>();
+        content + separators
+    };
+    let mut active = resolved.iter().map(|_| true).collect::<Vec<_>>();
+    if minimum_width(&active) > max_width {
+        for (index, width) in flexible_widths.iter().enumerate() {
+            if *width > 0 {
+                active[index] = false;
+            }
+        }
+        for index in (0..resolved.len()).rev() {
+            if flexible_widths[index] == 0 {
+                continue;
+            }
+            active[index] = true;
+            if minimum_width(&active) > max_width {
+                active[index] = false;
+            }
+        }
+    }
+    let visible_indices = active
+        .iter()
+        .enumerate()
+        .filter_map(|(index, active)| active.then_some(index))
+        .collect::<Vec<_>>();
+    let separator_width = visible_indices
+        .windows(2)
+        .map(|pair| display_width(tokens::separator(&resolved[pair[0]], &resolved[pair[1]])))
+        .sum::<usize>();
+    let fixed_width = visible_indices
+        .iter()
+        .map(|index| fixed_widths[*index])
+        .sum::<usize>();
+    let mut budgets = flexible_widths
+        .iter()
+        .enumerate()
+        .map(|(index, width)| usize::from(active[index] && *width > 0))
+        .collect::<Vec<_>>();
+    let minimum = budgets.iter().sum::<usize>();
+    let mut remaining = max_width
+        .saturating_sub(separator_width + fixed_width)
+        .saturating_sub(minimum);
+    while remaining > 0 {
+        let mut grew = false;
+        for (budget, width) in budgets.iter_mut().zip(&flexible_widths) {
+            if *budget > 0 && *budget < *width {
+                *budget += 1;
+                remaining -= 1;
+                grew = true;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    let mut spans = Vec::new();
+    for (position, index) in visible_indices.iter().copied().enumerate() {
+        let token = &resolved[index];
+        if position > 0 {
+            let previous = &resolved[visible_indices[position - 1]];
+            spans.push(Span::styled(
+                tokens::separator(previous, token),
+                Style::default().fg(p.overlay0).add_modifier(Modifier::DIM),
+            ));
+        }
+        match &token.kind {
+            ResolvedTokenKind::StateIcon => {
+                spans.push(Span::styled(
+                    state_icon.0.to_string(),
+                    apply_token_style(state_icon.1, token.style),
+                ));
+            }
+            ResolvedTokenKind::StateText(text) => {
+                spans.push(Span::styled(
+                    truncate_end(text, budgets[index]),
+                    apply_token_style(state_text_style, token.style),
+                ));
+            }
+            ResolvedTokenKind::Workspace(text) => {
+                spans.push(Span::styled(
+                    truncate_end(text, budgets[index]),
+                    apply_token_style(workspace_style, token.style),
+                ));
+            }
+            ResolvedTokenKind::Tab(text)
+            | ResolvedTokenKind::Pane(text)
+            | ResolvedTokenKind::Agent(text)
+            | ResolvedTokenKind::Branch(text) => {
+                spans.push(Span::styled(
+                    truncate_end(text, budgets[index]),
+                    apply_token_style(secondary_style, token.style),
+                ));
+            }
+            ResolvedTokenKind::GitStatus { ahead, behind } => {
+                if *ahead > 0 {
+                    spans.push(Span::styled(
+                        format!("↑{ahead}"),
+                        apply_token_style(Style::default().fg(p.green), token.style),
+                    ));
+                }
+                if *ahead > 0 && *behind > 0 {
+                    spans.push(Span::styled(
+                        " ",
+                        apply_token_style(Style::default(), token.style),
+                    ));
+                }
+                if *behind > 0 {
+                    spans.push(Span::styled(
+                        format!("↓{behind}"),
+                        apply_token_style(Style::default().fg(p.red), token.style),
+                    ));
+                }
+            }
+            ResolvedTokenKind::TerminalTitle(text) | ResolvedTokenKind::Custom(text) => {
+                spans.push(Span::styled(
+                    truncate_end(text, budgets[index]),
+                    apply_token_style(custom_style, token.style),
+                ));
+            }
+        }
+    }
+    spans
+}
+
+fn apply_token_style(mut style: Style, patch: crate::config::SidebarTokenStyle) -> Style {
+    if let Some(fg) = patch.fg {
+        style = style.fg(fg.ratatui());
+    }
+    if let Some(bold) = patch.bold {
+        style = if bold {
+            style.add_modifier(Modifier::BOLD)
+        } else {
+            style.remove_modifier(Modifier::BOLD)
+        };
+    }
+    if let Some(dim) = patch.dim {
+        style = if dim {
+            style.add_modifier(Modifier::DIM)
+        } else {
+            style.remove_modifier(Modifier::DIM)
+        };
+    }
+    style
+}
 fn render_workspace_list(
     app: &AppState,
     terminal_runtimes: &TerminalRuntimeRegistry,
@@ -2002,6 +2293,52 @@ fn render_workspace_list(
         };
         let branch_style = Style::default().fg(branch_color);
         let separator_style = Style::default().fg(p.overlay0);
+        if !use_legacy_space_lines(app) {
+            let rows = resolved_space_rows(app, ws, card.indented);
+            for (render_idx, resolved) in rows.iter().enumerate() {
+                let y = row_y + render_idx as u16;
+                if y >= list_bottom || render_idx as u16 >= row_height {
+                    break;
+                }
+                let mut spans = if render_idx == 0 {
+                    if card.indented {
+                        vec![Span::raw("   ")]
+                    } else if let Some((_, collapsed)) = parent_group.as_ref() {
+                        vec![
+                            Span::styled(
+                                if *collapsed { "▸" } else { "▾" },
+                                Style::default().fg(p.accent),
+                            ),
+                            Span::raw(" "),
+                        ]
+                    } else {
+                        vec![Span::raw(" ")]
+                    }
+                } else {
+                    vec![Span::raw(if card.indented { "     " } else { "   " })]
+                };
+                let prefix_width = spans
+                    .iter()
+                    .map(|span| display_width(span.content.as_ref()))
+                    .sum::<usize>();
+                spans.extend(resolved_token_spans(
+                    resolved,
+                    status_dot,
+                    Style::default().fg(state_label_color(agg_state, agg_seen, p)),
+                    name_style,
+                    branch_style,
+                    separator_style,
+                    p,
+                    card.rect.width as usize - prefix_width.min(card.rect.width as usize),
+                ));
+                frame.render_widget(
+                    Paragraph::new(Line::from(spans)),
+                    Rect::new(card.rect.x, y, card.rect.width, 1),
+                );
+            }
+            continue;
+        }
+
         let ordered_items = ordered_sidebar_space_items(&app.sidebar_space);
         let render_lines = workspace_render_lines(app, ws);
 
@@ -2358,9 +2695,20 @@ fn sidebar_agent_item_spans(
             let label = entry
                 .state_labels
                 .get(agent_panel_status_key(entry.state, entry.seen))
-                .map(String::as_str)
-                .unwrap_or_else(|| state_label(entry.state, entry.seen));
-            Some(vec![Span::styled(label.to_string(), status_style)])
+                .map_or_else(
+                    || {
+                        match (entry.state, entry.seen) {
+                            (AgentState::Blocked, _) => "blocked",
+                            (AgentState::Working, _) => "working",
+                            (AgentState::Idle, false) => "done",
+                            (AgentState::Idle, true) => "idle",
+                            (AgentState::Unknown, _) => "unknown",
+                        }
+                        .to_string()
+                    },
+                    Clone::clone,
+                );
+            Some(vec![Span::styled(label, status_style)])
         }
         SidebarAgentItem::Time => entry
             .working_duration
@@ -2770,6 +3118,13 @@ pub(crate) fn settings_sidebar_space_demo_lines(app: &AppState) -> Vec<Line<'sta
         }
     }
 
+    if !lines.is_empty() {
+        let second_card = lines.clone();
+        lines.extend(
+            std::iter::repeat_with(Line::default).take(usize::from(app.sidebar_space.row_gap)),
+        );
+        lines.extend(second_card);
+    }
     if lines.is_empty() {
         lines.push(Line::from(Span::styled(
             "  all demo space fields hidden",
@@ -2795,8 +3150,13 @@ pub(crate) fn settings_sidebar_agent_demo_lines(app: &AppState, width: u16) -> V
             primary_tab_label: Some("main".into()),
             agent_label: Some("claude".into()),
             agent_kind_label: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent: Some(crate::detect::Agent::Claude),
             state: AgentState::Working,
             seen: true,
+            state_entered_at: None,
+            work_started_at: None,
             last_agent_state_change_seq: None,
             custom_status: Some("planning".into()),
             state_labels: HashMap::new(),
@@ -2815,8 +3175,13 @@ pub(crate) fn settings_sidebar_agent_demo_lines(app: &AppState, width: u16) -> V
             primary_tab_label: Some("review".into()),
             agent_label: Some("codex".into()),
             agent_kind_label: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent: Some(crate::detect::Agent::Codex),
             state: AgentState::Idle,
             seen: true,
+            state_entered_at: None,
+            work_started_at: None,
             last_agent_state_change_seq: None,
             custom_status: Some("ready".into()),
             state_labels: HashMap::new(),
@@ -2827,16 +3192,16 @@ pub(crate) fn settings_sidebar_agent_demo_lines(app: &AppState, width: u16) -> V
             tokens: HashMap::new(),
         },
     ];
-    let render_lines = sidebar_agent_render_lines(app);
+    let demo_count = demos.len();
     let mut lines = Vec::new();
-
-    for entry in demos {
+    let render_lines = sidebar_agent_render_lines(app);
+    for (entry_index, entry) in demos.into_iter().enumerate() {
         let label_color = state_label_color(entry.state, entry.seen, p);
         let name_style = Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD);
         let status_style = Style::default().fg(label_color);
         let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
-        for (render_idx, line) in render_lines.iter().copied().enumerate() {
-            let prefix = if render_idx == 0 { " " } else { "   " };
+        for (row_index, line) in render_lines.iter().copied().enumerate() {
+            let prefix = if row_index == 0 { " " } else { "   " };
             let mut content = sidebar_agent_line_content(
                 &entry,
                 app,
@@ -2847,19 +3212,108 @@ pub(crate) fn settings_sidebar_agent_demo_lines(app: &AppState, width: u16) -> V
                 agent_style,
                 p,
             );
-            content
-                .left
-                .insert(0, Span::styled(prefix, Style::default()));
+            content.left.insert(0, Span::raw(prefix));
             lines.push(Line::from(fixed_width_agent_line_spans(
                 content,
                 width,
                 agent_style,
             )));
         }
+        if entry_index + 1 < demo_count {
+            lines.extend(
+                std::iter::repeat_with(Line::default)
+                    .take(usize::from(app.sidebar_agent.row_gap)),
+            );
+        }
     }
 
     lines
 }
+
+fn sidebar_agent_render_lines(app: &AppState) -> Vec<SidebarLine> {
+    (0..app.sidebar_agent.lines.len().max(1))
+        .map(SidebarLine::from_index)
+        .collect()
+}
+
+fn render_legacy_agent_rows(
+    app: &AppState,
+    frame: &mut Frame,
+    body: Rect,
+    details: &[AgentPanelEntry],
+    scroll: usize,
+) {
+    let p = &app.palette;
+    let body_bottom = body.y + body.height;
+    let render_lines = sidebar_agent_render_lines(app);
+    let mut row_y = body.y;
+    for (offset, detail) in details.iter().skip(scroll).enumerate() {
+        let global_idx = scroll.saturating_add(offset);
+        let entry_rows = render_lines.len() as u16;
+        if row_y.saturating_add(entry_rows) > body_bottom {
+            break;
+        }
+        let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
+        let hovered = match app.sidebar_hover {
+            Some(crate::app::state::SidebarHoverTarget::AgentMono {
+                ws_idx,
+                tab_idx,
+                pane_id,
+            }) => ws_idx == detail.ws_idx && tab_idx == detail.tab_idx && pane_id == detail.pane_id,
+            Some(crate::app::state::SidebarHoverTarget::AgentRoute { route_idx }) => {
+                route_idx == global_idx
+            }
+            _ => false,
+        };
+        let label_color = state_label_color(detail.state, detail.seen, p);
+        let row_style = if is_active {
+            Style::default().bg(p.surface_dim)
+        } else if hovered {
+            Style::default().bg(p.hover_bg())
+        } else {
+            Style::default()
+        };
+        let name_style = if is_active {
+            Style::default().fg(p.text).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(p.subtext0).add_modifier(Modifier::BOLD)
+        };
+        let status_style = if is_active {
+            Style::default().fg(label_color)
+        } else {
+            Style::default().fg(label_color).add_modifier(Modifier::DIM)
+        };
+        let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
+        for (render_idx, line) in render_lines.iter().copied().enumerate() {
+            let prefix = if render_idx == 0 { " " } else { "   " };
+            let mut content = sidebar_agent_line_content(
+                detail,
+                app,
+                line,
+                body.width.saturating_sub(prefix.len() as u16) as usize,
+                name_style,
+                status_style,
+                agent_style,
+                p,
+            );
+            content
+                .left
+                .insert(0, Span::styled(prefix, Style::default()));
+            render_agent_line(
+                frame,
+                Rect::new(body.x, row_y, body.width, 1),
+                content,
+                row_style,
+                agent_style,
+            );
+            row_y += 1;
+        }
+        row_y = row_y
+            .saturating_add(agent_entry_gap(app, global_idx, details.len()))
+            .min(body_bottom);
+    }
+}
+
 
 fn render_agent_detail(
     app: &AppState,
@@ -2927,22 +3381,27 @@ fn render_agent_detail(
     }
 
     let scroll = app.agent_panel_scroll.min(metrics.max_offset_from_bottom);
+    if use_legacy_agent_lines(app) {
+        render_legacy_agent_rows(app, frame, body, &details, scroll);
+        if let Some(track) = scrollbar_rect {
+            render_scrollbar(frame, metrics, track, p.surface_dim, p.overlay0, "▕");
+        }
+        return;
+    }
+
     let mut row_y = body.y;
     let body_bottom = body.y + body.height;
-    let render_lines = sidebar_agent_render_lines(app);
-    // item 7 (Area 4): `skip(scroll)` drops the leading entries, so recover the
-    // GLOBAL entry index (`scroll + offset`) to compare against the client
-    // `AgentRoute { route_idx }` (route_idx is the flat global index, stable across recompose).
+    // `skip(scroll)` drops the leading entries, so recover the global route index for mobile
+    // hover matching while rendering the per-agent configurable token rows.
     for (offset, detail) in details.iter().skip(scroll).enumerate() {
         let global_idx = scroll.saturating_add(offset);
-        let entry_rows = render_lines.len() as u16;
-        if row_y.saturating_add(entry_rows) > body_bottom {
+        let rows = resolved_agent_rows(app, detail);
+        let height = (rows.len().max(1) as u16).min(body.height);
+        if row_y.saturating_add(height) > body_bottom {
             break;
         }
 
         let is_active = app.is_active_pane(detail.ws_idx, detail.tab_idx, detail.pane_id);
-        // hover matches the monolithic pane-keyed variant OR the client route-index variant.
-        // Active always wins; hover never bolds.
         let hovered = match app.sidebar_hover {
             Some(crate::app::state::SidebarHoverTarget::AgentMono {
                 ws_idx,
@@ -2954,9 +3413,7 @@ fn render_agent_detail(
             }
             _ => false,
         };
-
         let label_color = state_label_color(detail.state, detail.seen, p);
-
         let row_style = if is_active {
             Style::default().bg(p.surface_dim)
         } else if hovered {
@@ -2964,7 +3421,6 @@ fn render_agent_detail(
         } else {
             Style::default()
         };
-
         let name_style = if is_active {
             Style::default().fg(p.text).add_modifier(Modifier::BOLD)
         } else {
@@ -2976,36 +3432,30 @@ fn render_agent_detail(
             Style::default().fg(label_color).add_modifier(Modifier::DIM)
         };
         let agent_style = Style::default().fg(p.overlay0).add_modifier(Modifier::DIM);
+        let state_icon = agent_icon(detail.state, detail.seen, app.spinner_tick, p);
 
-        for (render_idx, line) in render_lines.iter().copied().enumerate() {
-            let prefix = if render_idx == 0 { " " } else { "   " };
-            let mut content = sidebar_agent_line_content(
-                detail,
-                app,
-                line,
-                body.width.saturating_sub(prefix.len() as u16) as usize,
-                name_style,
+        for (row_index, resolved) in rows.iter().take(height as usize).enumerate() {
+            let prefix = if row_index == 0 { " " } else { "   " };
+            let mut spans = vec![Span::raw(prefix)];
+            spans.extend(resolved_token_spans(
+                resolved,
+                state_icon,
                 status_style,
+                name_style,
+                agent_style,
                 agent_style,
                 p,
+                body.width.saturating_sub(prefix.len() as u16) as usize,
+            ));
+            frame.render_widget(
+                Paragraph::new(Line::from(spans)).style(row_style),
+                Rect::new(body.x, row_y + row_index as u16, body.width, 1),
             );
-            content
-                .left
-                .insert(0, Span::styled(prefix, Style::default()));
-
-            render_agent_line(
-                frame,
-                Rect::new(body.x, row_y, body.width, 1),
-                content,
-                row_style,
-                agent_style,
-            );
-            row_y += 1;
         }
-
-        if row_y < body_bottom {
-            row_y += 1;
-        }
+        row_y = row_y
+            .saturating_add(height)
+            .saturating_add(agent_entry_gap(app, global_idx, details.len()))
+            .min(body_bottom);
     }
 
     if let Some(track) = scrollbar_rect {
@@ -3330,6 +3780,33 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
     }
 
     #[test]
+    fn legacy_agent_cards_render_on_consecutive_rows() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+        app.ensure_test_terminals();
+        for (workspace, agent) in app.workspaces.iter().zip([Agent::Pi, Agent::Claude]) {
+            let pane_id = workspace.tabs[0].root_pane;
+            let terminal_id = workspace.tabs[0].panes[&pane_id]
+                .attached_terminal_id
+                .clone();
+            app.terminals.get_mut(&terminal_id).unwrap().detected_agent = Some(agent);
+        }
+        assert!(use_legacy_agent_lines(&app));
+
+        let area = Rect::new(0, 0, 20, 8);
+        let body = agent_panel_body_rect(area, false);
+        let mut terminal = Terminal::new(TestBackend::new(20, 8)).unwrap();
+        terminal
+            .draw(|frame| render_agent_detail(&app, &TerminalRuntimeRegistry::new(), frame, area))
+            .unwrap();
+
+        assert!(
+            row_text(terminal.backend().buffer(), body.y + 2, body.width).contains("two"),
+            "the second two-row card must begin immediately after the first"
+        );
+    }
+
+    #[test]
     fn narrow_agent_rows_preserve_later_tab_tokens() {
         let mut app = crate::app::state::AppState::test_new();
         let mut workspace = Workspace::test_new("very-long-workspace-name");
@@ -3610,8 +4087,13 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             primary_tab_label: Some("검토".into()),
             agent_label: Some("codex".into()),
             agent_kind_label: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent: None,
             state: AgentState::Idle,
             seen: true,
+            state_entered_at: None,
+            work_started_at: None,
             last_agent_state_change_seq: None,
             custom_status: None,
             state_labels: HashMap::new(),
@@ -3869,10 +4351,29 @@ rows = [[{ token = "git_status", fg = "#123456" }]]
             .collect::<Vec<_>>()
             .join("\n");
 
-        assert!(rendered.contains("working · claude"), "{rendered:?}");
-        assert!(rendered.contains("idle · codex"), "{rendered:?}");
+        assert!(rendered.contains("work") && rendered.contains("claude"), "{rendered:?}");
+        assert!(rendered.contains("idle") && rendered.contains("codex"), "{rendered:?}");
         assert!(!rendered.contains("planning"), "{rendered:?}");
         assert!(!rendered.contains("ready"), "{rendered:?}");
+    }
+
+    #[test]
+    fn settings_sidebar_demos_preview_independent_card_gaps() {
+        let mut app = crate::app::state::AppState::test_new();
+        app.sidebar_space.row_gap = 2;
+        app.sidebar_agent.row_gap = 3;
+
+        let space_demo = settings_sidebar_space_demo_lines(&app);
+        assert_eq!(
+            space_demo.iter().filter(|line| line_text(line).is_empty()).count(),
+            2
+        );
+
+        let agent_demo = settings_sidebar_agent_demo_lines(&app, 32);
+        assert_eq!(
+            agent_demo.iter().filter(|line| line_text(line).is_empty()).count(),
+            3
+        );
     }
 
     #[test]
@@ -4001,8 +4502,13 @@ lines = [
             primary_tab_label: Some("test-escalation".into()),
             agent_label: Some("claude".into()),
             agent_kind_label: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent: None,
             state: AgentState::Idle,
             seen: true,
+            state_entered_at: None,
+            work_started_at: None,
             last_agent_state_change_seq: None,
             custom_status: None,
             state_labels: HashMap::new(),
@@ -5188,6 +5694,17 @@ lines = [
         assert!(!cards[0].indented);
         assert_eq!(cards[1].ws_idx, 1);
         assert!(cards[1].indented);
+        assert_eq!(cards[1].rect.y, cards[0].rect.y + cards[0].rect.height);
+    }
+
+    #[test]
+    fn ungrouped_workspace_cards_render_on_consecutive_rows() {
+        let mut app = AppState::test_new();
+        app.workspaces = vec![Workspace::test_new("one"), Workspace::test_new("two")];
+
+        let (cards, _) = compute_workspace_list_areas(&app, Rect::new(0, 0, 30, 20));
+
+        assert_eq!(cards.len(), 2);
         assert_eq!(cards[1].rect.y, cards[0].rect.y + cards[0].rect.height);
     }
 

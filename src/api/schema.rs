@@ -57,6 +57,8 @@ pub enum Method {
     ServerReloadConfig(EmptyParams),
     #[serde(rename = "server.ui_settings")]
     ServerUiSettings(EmptyParams),
+    #[serde(rename = "server.set_sidebar_layout")]
+    ServerSetSidebarLayout(ServerSetSidebarLayoutParams),
     #[serde(rename = "server.agent_manifests")]
     ServerAgentManifests(EmptyParams),
     #[serde(rename = "server.reload_agent_manifests")]

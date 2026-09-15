@@ -249,7 +249,7 @@ pub(super) fn state_label(state: AgentState, seen: bool) -> &'static str {
         (AgentState::Working, _) => "work",
         (AgentState::Idle, false) => "done",
         (AgentState::Idle, true) => "idle",
-        (AgentState::Unknown, _) => "idle",
+        (AgentState::Unknown, _) => "unknown",
     }
 }
 
@@ -307,6 +307,11 @@ mod tests {
                 assert_eq!(style.fg, Some(color));
             }
         }
+    }
+
+    #[test]
+    fn unknown_state_is_not_presented_as_idle() {
+        assert_eq!(state_label(AgentState::Unknown, true), "unknown");
     }
 
     #[test]

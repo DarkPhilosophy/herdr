@@ -1230,9 +1230,9 @@ impl Workspace {
         terminals: &HashMap<TerminalId, TerminalState>,
         terminal_runtimes: &TerminalRuntimeRegistry,
     ) -> Option<PathBuf> {
-        self.tabs
-            .first()
-            .and_then(|tab| tab.cwd_for_pane(tab.root_pane, terminals, terminal_runtimes))
+        self.active_tab()
+            .zip(self.focused_pane_id())
+            .and_then(|(tab, pane_id)| tab.cwd_for_pane(pane_id, terminals, terminal_runtimes))
             .or_else(|| Some(self.identity_cwd.clone()))
     }
 

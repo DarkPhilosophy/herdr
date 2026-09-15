@@ -1420,8 +1420,9 @@ fn dispatch_composited_mouse_input(
         model.ui_settings(),
         Instant::now(),
     ) {
-        // #26: the outcome decides resize vs redraw — a drag or a double-click reset changes the
-        // content width (resize the remote PTY); beginning/ending a drag only redraws.
+        if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
+            return sidebar_layout_persist_dispatch(compositor);
+        }
         return match outcome {
             compositor::SidebarResizeOutcome::Resized(cols, rows) => {
                 ClientInputDispatch::Resize { cols, rows }
@@ -1437,7 +1438,24 @@ fn dispatch_composited_mouse_input(
         .handle_sidebar_section_divider_mouse(model, mouse, host_size.0, host_size.1)
         .is_some()
     {
-        return ClientInputDispatch::Redraw;
+        return if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
+            sidebar_layout_persist_dispatch(compositor)
+        } else {
+            ClientInputDispatch::Redraw
+        };
+    }
+
+    // The API-sections divider is independent from the spaces↔agents divider. It must be handled
+    // before scrollbars/cards so dragging it never focuses or scrolls content underneath.
+    if compositor
+        .handle_sidebar_sections_divider_mouse(model, mouse, host_size.0, host_size.1)
+        .is_some()
+    {
+        return if matches!(mouse.kind, MouseEventKind::Up(MouseButton::Left)) {
+            sidebar_layout_persist_dispatch(compositor)
+        } else {
+            ClientInputDispatch::Redraw
+        };
     }
 
     // #21: scrollbar track-click + thumb-drag (client-local). Runs before the wheel handler and
@@ -1595,6 +1613,21 @@ fn dispatch_composited_mouse_input(
 
     translate_content_mouse_input(data, mouse, sidebar_width)
 }
+fn sidebar_layout_persist_dispatch(
+    compositor: &compositor::ClientCompositor,
+) -> ClientInputDispatch {
+    ClientInputDispatch::ApiRequest {
+        server_id: supervisor::ServerId::main(),
+        refresh: ClientApiRefreshPolicy::Deferred,
+        request: Box::new(crate::api::schema::Request {
+            id: "client:set-sidebar-layout".into(),
+            method: crate::api::schema::Method::ServerSetSidebarLayout(
+                compositor.persisted_sidebar_layout(),
+            ),
+        }),
+    }
+}
+
 
 /// #46/#47: mouse handling for the one OPEN client menu (launcher / workspace / host). Called from
 /// the top of `dispatch_composited_mouse_input` before any sidebar handler, so the modal menu owns
@@ -2068,10 +2101,10 @@ fn translate_content_mouse_input(
 
 impl ClientState {
     fn request_full_redraw(&mut self) {
-        self.blit_encoder = render_ansi::BlitEncoder::new();
-        // #45: a full repaint is requested precisely when the sidebar model/view changed too (every
-        // such event handler calls this). Drop the cached shell so the next compose rebuilds it —
-        // otherwise a reused content frame would paint a stale sidebar over fresh model state.
+        // A model/view change invalidates the cached sidebar shell, but it does not invalidate the
+        // terminal's last painted frame. Preserve the blit baseline so the freshly rebuilt shell is
+        // diffed against what is actually on screen; resetting it here turned every supervisor
+        // refresh into a synchronized full-screen repaint and caused visible idle flicker.
         self.shell_cache = None;
         #[cfg(windows)]
         {
@@ -2597,6 +2630,8 @@ fn build_hello_message(
         keybindings,
         launch_mode,
     }
+}
+
 /// Builds the `SessionEnv` message from env vars injected by the remote
 /// launcher (`HERDR_SESSION_TOKENS`, `HERDR_SESSION_ENV`), each holding
 /// newline-separated `NAME=VALUE` lines. Returns `None` when neither var is
@@ -5192,6 +5227,17 @@ fn flush_composited_frame(
     compose_elapsed: Duration,
     shell_rebuilt: bool,
 ) {
+    // Model/subscription refreshes can legitimately request a recompose even when the resulting
+    // terminal frame is byte-for-byte unchanged. Encoding such a frame still emits synchronized
+    // output plus cursor hide/restore sequences; terminals without reliable synchronized-output
+    // support present that as an otherwise unexplained idle flicker. Treat the encoder's committed
+    // frame as the output boundary and suppress only exact duplicates.
+    if state.blit_encoder.is_current(&frame_data) {
+        state.pending_hover_render = false;
+        state.pending_full_render = false;
+        state.last_composited_render_at = Instant::now();
+        return;
+    }
     let encode_started = Instant::now();
     #[cfg(windows)]
     let encoded = state
@@ -6230,12 +6276,16 @@ async fn run_client_loop(
                 // whole fleet. A main id refreshes locally (`&mut`); a secondary id spawns a single
                 // off-loop fetch (the helper is a no-op on a main id).
                 let now = Instant::now();
+                let mut changed = false;
                 if let Some(model) = &mut state.supervisor_model {
                     if server_id == supervisor::ServerId::main() {
-                        if let Err(err) = model.refresh_main_summary_from_api(
+                        match model.refresh_main_summary_from_api(
                             &mut crate::api::client::ApiClient::local(),
                         ) {
-                            warn!(err = %err, "failed to refresh changed main summary");
+                            Ok(summary_changed) => changed = summary_changed,
+                            Err(err) => {
+                                warn!(err = %err, "failed to refresh changed main summary");
+                            }
                         }
                     } else {
                         start_single_secondary_summary_refresh(
@@ -6247,7 +6297,6 @@ async fn run_client_loop(
                         );
                     }
                     state.last_summary_refresh.insert(server_id.clone(), now);
-                    state.request_full_redraw();
                 }
                 schedule_missing_secondary_stream_retries(
                     &mut state,
@@ -6263,7 +6312,10 @@ async fn run_client_loop(
                         &should_quit,
                     );
                 }
-                request_composited_render(&mut state);
+                if changed {
+                    state.request_full_redraw();
+                    request_composited_render(&mut state);
+                }
             }
             ClientLoopEvent::SupervisorSummaryFetched {
                 server_id,
@@ -6796,8 +6848,6 @@ async fn run_client_loop(
                                 .frame_cache
                                 .retain(|server_id, _| model.contains_server(server_id));
                         }
-                        state.request_full_redraw();
-                        render_cached_composited_frame(&mut state);
                     }
                     Err(err) => {
                         warn!(
@@ -6861,6 +6911,7 @@ async fn run_client_loop(
                     recompose_composited_frame(&mut state, false);
                 }
                 sample_download_rates(&mut state, now);
+                crate::render_prof::flush_if_due();
                 // issue #13: probe each connected server's latency over its persistent stream.
                 if now.duration_since(state.last_ping_at) >= SERVER_PING_INTERVAL {
                     state.last_ping_at = now;
@@ -6895,7 +6946,6 @@ async fn run_client_loop(
                     }
                 }
 
-                let mut did_local_refresh = false;
                 if supervisor_summary_refresh_due(now, state.last_supervisor_summary_refresh) {
                     // #42: the 2s gate now SPAWNS the local main/registry/ui-settings refresh off
                     // the UI loop (posts MainSupervisorRefreshed) instead of blocking the loop on
@@ -6915,10 +6965,6 @@ async fn run_client_loop(
                             &should_quit,
                         );
                     }
-                    did_local_refresh = true;
-                }
-                if !due.is_empty() || did_local_refresh {
-                    render_cached_composited_frame(&mut state);
                 }
 
                 // item 5: gated, fully-local animation step. Advances the single client
@@ -8052,18 +8098,19 @@ mod tests {
         );
     }
 
-    /// Counterpart locking the contrast: a genuine model change (`request_full_redraw`) DOES reset
-    /// the blit baseline, so the following frame is a full repaint. This is what a hover must NOT do.
+    /// A genuine model change rebuilds the sidebar shell but preserves the terminal-frame
+    /// baseline. The rebuilt frame must be diffed against the pixels already displayed; otherwise
+    /// every periodic supervisor refresh becomes a full-screen repaint.
     #[test]
-    fn request_full_redraw_resets_blit_baseline() {
+    fn request_full_redraw_preserves_blit_baseline() {
         let model = supervisor::ClientSupervisorModel::new("local");
         let mut state = test_client_state_with_model(model);
 
         let next_is_full = next_encode_is_full_after(&mut state, |s| s.request_full_redraw());
 
         assert!(
-            next_is_full,
-            "request_full_redraw must reset the blit baseline so the next frame is a full repaint"
+            !next_is_full,
+            "request_full_redraw must preserve the blit baseline and emit a partial update"
         );
     }
 

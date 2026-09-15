@@ -3473,9 +3473,11 @@ mod tests {
     fn omitted_sidebar_items_are_treated_as_disabled() {
         let spaces = SidebarSpacePreferences {
             lines: vec![vec![SidebarItem::visible(SidebarSpaceItem::Name)]],
+            ..Default::default()
         };
         let agents = SidebarAgentPreferences {
             lines: vec![vec![SidebarItem::visible(SidebarAgentItem::Status)]],
+            ..Default::default()
         };
 
         assert!(SidebarSpaceItem::Name.enabled(&spaces));
