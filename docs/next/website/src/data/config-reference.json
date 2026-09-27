@@ -1051,6 +1051,17 @@
           ]
         },
         {
+          "key": "ui.agent_state_display",
+          "type": "enum",
+          "default": "\"both\"",
+          "description": "Agent panel state text: \"text\" shows the status word, \"time\" shows elapsed time in the current state (frozen at total work duration once done), \"both\" shows \"2m 34s · working\".",
+          "values": [
+            "text",
+            "time",
+            "both"
+          ]
+        },
+        {
           "key": "ui.status_indicators",
           "type": "enum",
           "default": "\"dots\"",

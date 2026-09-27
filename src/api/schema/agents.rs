@@ -218,6 +218,13 @@ pub struct AgentInfo {
     pub interactive_ready: bool,
     #[serde(default)]
     pub state_change_seq: u64,
+    /// Unix milliseconds when the current agent status was entered.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_entered_at_ms: Option<u64>,
+    /// Unix milliseconds when the current work phase started; kept after completion so the
+    /// finished label can show total work duration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_started_at_ms: Option<u64>,
     /// The current idle transition completed work, independently of who has viewed it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion_seq: Option<u64>,

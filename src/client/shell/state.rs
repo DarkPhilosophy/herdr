@@ -25,6 +25,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) sidebar_sections: Vec<crate::config::CustomSidebarSectionConfig>,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
+    pub(super) agent_state_display: crate::config::AgentStateDisplayConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
     pub(super) sound_enabled: bool,
     pub(super) toast_delivery: crate::config::ToastDelivery,
@@ -950,6 +951,8 @@ pub(crate) struct ClientShellState {
     pub(super) config_diagnostic: Option<String>,
     pub(super) endpoint_error: Option<String>,
     pub(super) endpoint_error_deadline: Option<std::time::Instant>,
+    /// Last wall-clock second the agent elapsed-time labels were painted for.
+    pub(super) agent_elapsed_second: u64,
     pub(super) dismissed_product_announcement: Option<(String, String)>,
 }
 
@@ -1115,6 +1118,7 @@ impl ClientShellState {
             local_config_diagnostic,
             endpoint_error: None,
             endpoint_error_deadline: None,
+            agent_elapsed_second: 0,
             dismissed_product_announcement: None,
         }
     }
@@ -1865,6 +1869,31 @@ impl ClientShellState {
             return true;
         }
         false
+    }
+
+    /// Repaint once per wall-clock second while any agent shows a live elapsed timer.
+    pub(crate) fn tick_agent_elapsed(&mut self) -> bool {
+        if self.config.agent_state_display == crate::config::AgentStateDisplayConfig::Text {
+            return false;
+        }
+        let live = self.snapshot.as_ref().is_some_and(|snapshot| {
+            snapshot.agents.iter().any(|agent| {
+                matches!(
+                    agent.agent_status,
+                    crate::api::schema::AgentStatus::Working
+                        | crate::api::schema::AgentStatus::Blocked
+                ) && agent.state_entered_at_ms.is_some()
+            })
+        });
+        if !live {
+            return false;
+        }
+        let second = crate::terminal::state::unix_now_ms() / 1000;
+        if self.agent_elapsed_second == second {
+            return false;
+        }
+        self.agent_elapsed_second = second;
+        true
     }
 
     pub(crate) fn timer_delay(&self, now: std::time::Instant) -> std::time::Duration {

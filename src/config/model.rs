@@ -940,6 +940,20 @@ impl<'de> Deserialize<'de> for PaneBordersConfig {
     }
 }
 
+/// What the agent panel's state text shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum AgentStateDisplayConfig {
+    /// Plain status words: working, blocked, done, idle.
+    Text,
+    /// Elapsed time in the current state (13s, 2m 34s, 1h 2m 3s).
+    #[serde(alias = "elapsed")]
+    Time,
+    /// Elapsed time plus status word (11m 0s · working).
+    #[default]
+    Both,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(default)]
 pub struct UiConfig {
@@ -1002,6 +1016,8 @@ pub struct UiConfig {
     pub window_title: String,
     /// Agent sidebar ordering. Saved values are "spaces" or "priority". Default: "spaces".
     pub agent_panel_sort: AgentPanelSortConfig,
+    /// Agent panel state text: "text", "time", or "both" (default).
+    pub agent_state_display: AgentStateDisplayConfig,
     /// Retired setting that Herdr wrote before the workspace filter was removed.
     #[serde(rename = "agent_panel_scope")]
     _legacy_agent_panel_scope: Option<LegacyAgentPanelScopeConfig>,
@@ -1231,6 +1247,7 @@ impl Default for UiConfig {
             tab_bar_right_separator: " ".into(),
             window_title: super::window_title::default_window_title(),
             agent_panel_sort: AgentPanelSortConfig::Spaces,
+            agent_state_display: AgentStateDisplayConfig::default(),
             _legacy_agent_panel_scope: None,
             status_indicators: StatusIndicatorStyle::Dots,
             sidebar: SidebarConfig::default(),

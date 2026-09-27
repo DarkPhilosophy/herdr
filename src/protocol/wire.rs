@@ -1100,6 +1100,12 @@ pub struct ClientShellAgent {
     pub state_labels: Vec<(String, String)>,
     pub tokens: Vec<(String, String)>,
     pub focused: bool,
+    /// Unix milliseconds when the current status was entered. Older endpoints omit it.
+    #[serde(default)]
+    pub state_entered_at_ms: Option<u64>,
+    /// Unix milliseconds when the current work phase started. Older endpoints omit it.
+    #[serde(default)]
+    pub work_started_at_ms: Option<u64>,
 }
 
 /// Origin-relative geometry for one pane in a rendered pane surface.

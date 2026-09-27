@@ -170,6 +170,8 @@ pub(super) fn snapshot_with_completions(
                 state_labels,
                 tokens,
                 focused,
+                state_entered_at_ms: agent.state_entered_at_ms,
+                work_started_at_ms: agent.work_started_at_ms,
             }
         })
         .collect();

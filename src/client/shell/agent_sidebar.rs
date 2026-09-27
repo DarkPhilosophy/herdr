@@ -284,10 +284,15 @@ pub(super) fn agent_row(
         .cloned()
         .collect::<HashMap<_, _>>();
     let tokens = agent.tokens.iter().cloned().collect::<HashMap<_, _>>();
-    let state_text = labels
-        .get(status_text(agent.agent_status))
-        .map(String::as_str)
-        .unwrap_or_else(|| sidebar_status_text(agent.agent_status));
+    let state_text = agent_state_display_label(
+        agent,
+        labels
+            .get(status_text(agent.agent_status))
+            .map(String::as_str),
+        config.agent_state_display,
+        crate::terminal::state::unix_now_ms(),
+    );
+    let state_text = state_text.as_str();
     let canonical_agent = agent
         .agent
         .as_deref()
@@ -392,5 +397,141 @@ fn sidebar_status_text(status: crate::api::schema::AgentStatus) -> &'static str 
         AgentStatus::Done => "done",
         AgentStatus::Working => "working",
         AgentStatus::Idle | AgentStatus::Unknown => "idle",
+    }
+}
+
+/// Contextual elapsed formatting: "13s", "2m 34s", "1h 2m 3s".
+pub(super) fn format_elapsed_short(total_secs: u64) -> String {
+    if total_secs < 60 {
+        return format!("{total_secs}s");
+    }
+    let minutes = total_secs / 60;
+    let seconds = total_secs % 60;
+    if minutes < 60 {
+        return format!("{minutes}m {seconds}s");
+    }
+    format!("{}h {}m {seconds}s", minutes / 60, minutes % 60)
+}
+
+/// Elapsed seconds the state label shows: live time in working/blocked, frozen total work
+/// duration once done/idle after work, none otherwise.
+fn agent_state_elapsed_secs(agent: &crate::protocol::ClientShellAgent, now_ms: u64) -> Option<u64> {
+    use crate::api::schema::AgentStatus;
+    let since = |start: u64, end: u64| end.checked_sub(start).map(|ms| ms / 1000);
+    match agent.agent_status {
+        AgentStatus::Working => since(
+            agent.work_started_at_ms.or(agent.state_entered_at_ms)?,
+            now_ms,
+        ),
+        AgentStatus::Blocked => since(agent.state_entered_at_ms?, now_ms),
+        AgentStatus::Done | AgentStatus::Idle => {
+            since(agent.work_started_at_ms?, agent.state_entered_at_ms?)
+        }
+        AgentStatus::Unknown => None,
+    }
+}
+
+/// State label honoring `ui.agent_state_display`: custom metadata labels win, then the native
+/// elapsed/both formats, falling back to the plain status word.
+pub(super) fn agent_state_display_label(
+    agent: &crate::protocol::ClientShellAgent,
+    custom: Option<&str>,
+    display: crate::config::AgentStateDisplayConfig,
+    now_ms: u64,
+) -> String {
+    if let Some(custom) = custom {
+        return custom.to_owned();
+    }
+    let plain = sidebar_status_text(agent.agent_status);
+    if display == crate::config::AgentStateDisplayConfig::Text {
+        return plain.to_owned();
+    }
+    let Some(secs) = agent_state_elapsed_secs(agent, now_ms) else {
+        return plain.to_owned();
+    };
+    let elapsed = format_elapsed_short(secs);
+    match display {
+        crate::config::AgentStateDisplayConfig::Time => elapsed,
+        crate::config::AgentStateDisplayConfig::Both
+        | crate::config::AgentStateDisplayConfig::Text => {
+            format!("{elapsed} · {plain}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod state_display_tests {
+    use super::*;
+    use crate::api::schema::AgentStatus;
+    use crate::config::AgentStateDisplayConfig;
+
+    fn agent(
+        status: AgentStatus,
+        entered: Option<u64>,
+        work: Option<u64>,
+    ) -> crate::protocol::ClientShellAgent {
+        crate::protocol::ClientShellAgent {
+            pane_id: "p".into(),
+            workspace_id: "w".into(),
+            tab_id: "t".into(),
+            name: None,
+            display_agent: None,
+            agent: None,
+            title: None,
+            terminal_title: None,
+            terminal_title_stripped: None,
+            agent_status: status,
+            state_change_seq: 0,
+            state_labels: Vec::new(),
+            tokens: Vec::new(),
+            focused: false,
+            state_entered_at_ms: entered,
+            work_started_at_ms: work,
+        }
+    }
+
+    #[test]
+    fn elapsed_short_format_is_contextual() {
+        assert_eq!(format_elapsed_short(13), "13s");
+        assert_eq!(format_elapsed_short(154), "2m 34s");
+        assert_eq!(format_elapsed_short(3723), "1h 2m 3s");
+    }
+
+    #[test]
+    fn working_counts_from_work_start_and_done_freezes_total() {
+        let working = agent(AgentStatus::Working, Some(50_000), Some(10_000));
+        assert_eq!(
+            agent_state_display_label(&working, None, AgentStateDisplayConfig::Both, 70_000),
+            "1m 0s · working"
+        );
+        let done = agent(AgentStatus::Done, Some(40_000), Some(10_000));
+        // Frozen at completion regardless of how long it has been done.
+        assert_eq!(
+            agent_state_display_label(&done, None, AgentStateDisplayConfig::Time, 999_000),
+            "30s"
+        );
+    }
+
+    #[test]
+    fn text_mode_custom_labels_and_missing_timestamps_fall_back() {
+        let blocked = agent(AgentStatus::Blocked, Some(0), None);
+        assert_eq!(
+            agent_state_display_label(&blocked, None, AgentStateDisplayConfig::Text, 5_000),
+            "blocked"
+        );
+        assert_eq!(
+            agent_state_display_label(
+                &blocked,
+                Some("approve?"),
+                AgentStateDisplayConfig::Both,
+                5_000
+            ),
+            "approve?"
+        );
+        let unknown_start = agent(AgentStatus::Working, None, None);
+        assert_eq!(
+            agent_state_display_label(&unknown_start, None, AgentStateDisplayConfig::Both, 5_000),
+            "working"
+        );
     }
 }

@@ -151,6 +151,13 @@ pub struct TerminalState {
     metadata_report_agents: HashMap<String, Agent>,
     metadata_token_sequence_sources: std::collections::HashSet<String>,
     pub state: AgentState,
+    /// Wall-clock unix milliseconds when the current `state` was entered. Drives the native
+    /// elapsed-time state display; wall clock so it crosses the server/client boundary.
+    pub state_entered_at_ms: Option<u64>,
+    /// Unix milliseconds when the current work phase started (the last transition into
+    /// working from a non-working, non-blocked state). Kept through working -> idle so the
+    /// completed label can show the frozen total work duration.
+    pub work_started_at_ms: Option<u64>,
     pub last_agent_state_change_seq: Option<u64>,
     pub last_agent_completion_seq: Option<u64>,
     pub revision: u64,
@@ -160,6 +167,13 @@ pub struct TerminalState {
     agent_process_acquisition_pending: bool,
     pub pending_agent_resume_plan: Option<crate::agent_resume::AgentResumePlan>,
     pub restore_error: Option<String>,
+}
+
+pub(crate) fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
 }
 
 impl TerminalState {
@@ -189,6 +203,8 @@ impl TerminalState {
             metadata_report_agents: HashMap::new(),
             metadata_token_sequence_sources: std::collections::HashSet::new(),
             state: AgentState::Unknown,
+            state_entered_at_ms: None,
+            work_started_at_ms: None,
             last_agent_state_change_seq: None,
             last_agent_completion_seq: None,
             revision: 0,
@@ -2172,6 +2188,8 @@ impl TerminalState {
         self.suppressed_full_lifecycle_hook_reports.clear();
         self.stale_full_lifecycle_hook_sessions.clear();
         self.state = AgentState::Unknown;
+        self.state_entered_at_ms = None;
+        self.work_started_at_ms = None;
         self.last_agent_state_change_seq = None;
         self.last_agent_completion_seq = None;
         self.launch_argv = None;
@@ -2267,6 +2285,17 @@ impl TerminalState {
             return None;
         }
 
+        if previous_state != state {
+            let now_ms = crate::terminal::state::unix_now_ms();
+            self.state_entered_at_ms = Some(now_ms);
+            // Blocked -> working continues the same work phase instead of restarting the clock.
+            if state == AgentState::Working
+                && (self.work_started_at_ms.is_none()
+                    || matches!(previous_state, AgentState::Idle | AgentState::Unknown))
+            {
+                self.work_started_at_ms = Some(now_ms);
+            }
+        }
         self.state = state;
         Some(EffectiveStateChange {
             previous_agent_label,

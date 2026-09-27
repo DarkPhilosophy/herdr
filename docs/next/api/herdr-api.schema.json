@@ -6860,6 +6860,15 @@
               "minimum": 0,
               "type": "integer"
             },
+            "state_entered_at_ms": {
+              "description": "Unix milliseconds when the current agent status was entered.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
             "state_labels": {
               "additionalProperties": {
                 "type": "string"
@@ -6899,6 +6908,15 @@
                 "pattern": "^[A-Za-z0-9_-]{1,32}$"
               },
               "type": "object"
+            },
+            "work_started_at_ms": {
+              "description": "Unix milliseconds when the current work phase started; kept after completion so the\nfinished label can show total work duration.",
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
             },
             "workspace_id": {
               "type": "string"
