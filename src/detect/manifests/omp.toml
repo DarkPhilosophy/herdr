@@ -1,0 +1,22 @@
+id = "omp"
+version = "2026.08.26.1"
+min_engine_version = 3
+updated_at = "2026-08-26T00:00:00Z"
+
+# OMP prefixes its live OSC title with π. While a turn is active, the title
+# places one of OMP's braille spinner frames immediately after that marker.
+[[rules]]
+id = "osc_title_working"
+state = "working"
+priority = 1050
+region = "osc_title"
+visible_working = true
+regex = ['^π [⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)']
+
+[[rules]]
+id = "osc_title_idle"
+state = "idle"
+priority = 100
+region = "osc_title"
+visible_idle = true
+regex = ['^π(?: |$)']

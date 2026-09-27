@@ -97,8 +97,9 @@ impl Agent {
         Self::Jcode,
     ];
 
-    pub const SCREEN_MANIFEST_AGENTS: [Self; 23] = [
+    pub const SCREEN_MANIFEST_AGENTS: [Self; 24] = [
         Self::Pi,
+        Self::Omp,
         Self::Claude,
         Self::Codex,
         Self::Gemini,
