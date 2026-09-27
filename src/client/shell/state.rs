@@ -24,6 +24,7 @@ pub(crate) struct ClientShellConfig {
     pub(super) spaces: SpacesSidebarConfig,
     pub(super) agents: crate::config::AgentsSidebarConfig,
     pub(super) sidebar_sections: Vec<crate::config::CustomSidebarSectionConfig>,
+    pub(super) sidebar_host: crate::config::SidebarHostConfig,
     pub(super) agent_panel_sort: crate::config::AgentPanelSortConfig,
     pub(super) agent_state_display: crate::config::AgentStateDisplayConfig,
     pub(super) status_indicators: crate::config::StatusIndicatorStyle,
@@ -953,6 +954,8 @@ pub(crate) struct ClientShellState {
     pub(super) endpoint_error_deadline: Option<std::time::Instant>,
     /// Last wall-clock second the agent elapsed-time labels were painted for.
     pub(super) agent_elapsed_second: u64,
+    /// Last machine-header animation tick painted.
+    pub(super) host_banner_tick: u32,
     pub(super) dismissed_product_announcement: Option<(String, String)>,
 }
 
@@ -1119,6 +1122,7 @@ impl ClientShellState {
             endpoint_error: None,
             endpoint_error_deadline: None,
             agent_elapsed_second: 0,
+            host_banner_tick: 0,
             dismissed_product_announcement: None,
         }
     }
@@ -1873,6 +1877,15 @@ impl ClientShellState {
 
     /// Repaint once per wall-clock second while any agent shows a live elapsed timer.
     pub(crate) fn tick_agent_elapsed(&mut self) -> bool {
+        if self.config.sidebar_host.animation == crate::config::HostBannerAnimation::Animated
+            && self.endpoints.len() > 1
+        {
+            let tick = super::host_banner::animation_tick(&self.config.sidebar_host);
+            if tick != self.host_banner_tick {
+                self.host_banner_tick = tick;
+                return true;
+            }
+        }
         if self.config.agent_state_display == crate::config::AgentStateDisplayConfig::Text {
             return false;
         }

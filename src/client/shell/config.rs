@@ -124,6 +124,7 @@ impl ClientShellConfig {
             spaces: config.ui.sidebar.spaces.clone(),
             agents: config.ui.sidebar.agents.clone(),
             sidebar_sections: config.ui.sidebar.resolved_sections(),
+            sidebar_host: config.ui.sidebar.host,
             agent_panel_sort: config.ui.agent_panel_sort,
             agent_state_display: config.ui.agent_state_display,
             status_indicators: config.ui.status_indicators,
@@ -329,6 +330,7 @@ impl ClientShellConfig {
                 self.spaces = ui.sidebar.spaces.clone();
                 self.agents = ui.sidebar.agents.clone();
                 self.sidebar_sections = ui.sidebar.resolved_sections();
+                self.sidebar_host = ui.sidebar.host;
                 self.agent_panel_sort = ui.agent_panel_sort;
                 self.agent_state_display = ui.agent_state_display;
                 self.status_indicators = ui.status_indicators;

@@ -29,7 +29,8 @@ pub use self::{
         ToastHerdrPosition, UpdateChannelConfig, MAX_TOAST_DELAY_SECONDS,
     },
     sidebar::{
-        AgentSidebarToken, AgentsSidebarConfig, CustomSidebarSectionConfig, SidebarConfig,
+        AgentSidebarToken, AgentsSidebarConfig, CustomSidebarSectionConfig, HostBannerAnimation,
+        HostBannerGlyph, HostBannerGradient, HostBannerSpeed, SidebarConfig, SidebarHostConfig,
         SidebarSectionPlacement, SidebarTokenStyle, SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,

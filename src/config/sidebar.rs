@@ -456,11 +456,123 @@ impl Default for AgentsSidebarConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(default)]
+#[serde(default, from = "RawSpacesSidebarConfig")]
 pub struct SpacesSidebarConfig {
-    #[serde(deserialize_with = "deserialize_sidebar_rows")]
     pub rows: SpaceSidebarRows,
     pub row_gap: u16,
+}
+
+/// Deserialization form of [`SpacesSidebarConfig`]. `rows` wins; the older `lines` layout
+/// (`{ field, show, color }` items) is accepted and translated to equivalent tokens.
+#[derive(Deserialize)]
+#[serde(default)]
+struct RawSpacesSidebarConfig {
+    #[serde(deserialize_with = "deserialize_optional_sidebar_rows")]
+    rows: Option<SpaceSidebarRows>,
+    lines: Option<Vec<Vec<LegacySpaceLineItem>>>,
+    row_gap: u16,
+}
+
+impl Default for RawSpacesSidebarConfig {
+    fn default() -> Self {
+        Self {
+            rows: None,
+            lines: None,
+            row_gap: DEFAULT_SIDEBAR_ROW_GAP,
+        }
+    }
+}
+
+impl From<RawSpacesSidebarConfig> for SpacesSidebarConfig {
+    fn from(raw: RawSpacesSidebarConfig) -> Self {
+        let rows = raw
+            .rows
+            .or_else(|| raw.lines.map(legacy_space_lines_to_rows))
+            .filter(|rows| !rows.is_empty())
+            .unwrap_or_else(|| Self::default().rows);
+        Self {
+            rows,
+            row_gap: raw.row_gap,
+        }
+    }
+}
+
+fn deserialize_optional_sidebar_rows<'de, D, T>(
+    deserializer: D,
+) -> Result<Option<Vec<Vec<T>>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    deserialize_sidebar_rows(deserializer).map(Some)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LegacySpaceField {
+    Status,
+    Name,
+    Branch,
+    BranchStatus,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum LegacySidebarColor {
+    #[default]
+    Default,
+    Muted,
+    Accent,
+    Cool,
+    Warm,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+struct LegacySpaceLineItem {
+    field: LegacySpaceField,
+    #[serde(default = "legacy_show_default")]
+    show: bool,
+    #[serde(default)]
+    color: LegacySidebarColor,
+}
+
+fn legacy_show_default() -> bool {
+    true
+}
+
+fn legacy_space_lines_to_rows(lines: Vec<Vec<LegacySpaceLineItem>>) -> SpaceSidebarRows {
+    lines
+        .into_iter()
+        .map(|line| {
+            line.into_iter()
+                .filter(|item| item.show)
+                .map(|item| {
+                    let token = match item.field {
+                        LegacySpaceField::Status => SpaceSidebarToken::StateIcon,
+                        LegacySpaceField::Name => SpaceSidebarToken::Workspace,
+                        LegacySpaceField::Branch => SpaceSidebarToken::Branch,
+                        LegacySpaceField::BranchStatus => SpaceSidebarToken::GitStatus,
+                    };
+                    // Theme-relative presets other than muted have no RGB equivalent in the
+                    // token style model; muted maps to dim.
+                    if item.color == LegacySidebarColor::Muted {
+                        SpaceSidebarToken::Styled {
+                            token: Box::new(token),
+                            style: SidebarTokenStyle {
+                                fg: None,
+                                bold: None,
+                                dim: Some(true),
+                            },
+                            rules: Vec::new(),
+                        }
+                    } else {
+                        token
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|line| !line.is_empty())
+        .collect()
 }
 
 impl Default for SpacesSidebarConfig {
@@ -531,7 +643,108 @@ impl Default for CustomSidebarSectionConfig {
 pub struct SidebarConfig {
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
+    /// Presentation of each machine (host) header row in a multi-machine sidebar.
+    pub host: SidebarHostConfig,
     pub sections: Vec<CustomSidebarSectionConfig>,
+}
+
+/// Machine header ("host banner") presentation. Unknown values fall back to defaults instead
+/// of failing the whole config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SidebarHostConfig {
+    pub gradient: HostBannerGradient,
+    pub animation: HostBannerAnimation,
+    pub speed: HostBannerSpeed,
+    pub glyph: HostBannerGlyph,
+    pub show_count: bool,
+}
+
+impl Default for SidebarHostConfig {
+    fn default() -> Self {
+        Self {
+            gradient: HostBannerGradient::Rainbow,
+            animation: HostBannerAnimation::Animated,
+            speed: HostBannerSpeed::Calm,
+            glyph: HostBannerGlyph::Left,
+            show_count: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostBannerGradient {
+    Rainbow,
+    Accent,
+    Cool,
+    Warm,
+    Muted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostBannerAnimation {
+    Animated,
+    Static,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostBannerSpeed {
+    Calm,
+    Normal,
+    Lively,
+}
+
+impl HostBannerSpeed {
+    /// Phase drift per animation tick.
+    pub fn drift(self) -> f32 {
+        match self {
+            Self::Calm => 0.04,
+            Self::Normal => 0.09,
+            Self::Lively => 0.16,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HostBannerGlyph {
+    Left,
+    None,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct RawSidebarHostConfig {
+    gradient: Option<toml::Value>,
+    animation: Option<toml::Value>,
+    speed: Option<toml::Value>,
+    glyph: Option<toml::Value>,
+    show_count: Option<bool>,
+}
+
+fn lenient_enum<T: serde::de::DeserializeOwned>(value: Option<toml::Value>, default: T) -> T {
+    value
+        .and_then(|value| T::deserialize(value).ok())
+        .unwrap_or(default)
+}
+
+impl<'de> Deserialize<'de> for SidebarHostConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = RawSidebarHostConfig::deserialize(deserializer)?;
+        let default = Self::default();
+        Ok(Self {
+            gradient: lenient_enum(raw.gradient, default.gradient),
+            animation: lenient_enum(raw.animation, default.animation),
+            speed: lenient_enum(raw.speed, default.speed),
+            glyph: lenient_enum(raw.glyph, default.glyph),
+            show_count: raw.show_count.unwrap_or(default.show_count),
+        })
+    }
 }
 
 impl SidebarConfig {
@@ -947,5 +1160,59 @@ id = "build"
 placement = "above_agents"
 "#;
         assert!(toml::from_str::<crate::config::Config>(input).is_err());
+    }
+}
+
+#[cfg(test)]
+mod legacy_sidebar_config_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_spaces_lines_translate_to_rows_and_rows_win() {
+        let config: SidebarConfig = toml::from_str(
+            r#"
+            [spaces]
+            lines = [
+              [{ field = "status" }, { field = "name" }, { field = "branch", show = false }],
+              [{ field = "branch_status", color = "muted" }],
+            ]
+            "#,
+        )
+        .expect("lines parse");
+        assert_eq!(
+            config.spaces.rows[0],
+            vec![SpaceSidebarToken::StateIcon, SpaceSidebarToken::Workspace]
+        );
+        assert!(matches!(
+            &config.spaces.rows[1][0],
+            SpaceSidebarToken::Styled { token, style, .. }
+                if **token == SpaceSidebarToken::GitStatus && style.dim == Some(true)
+        ));
+
+        let config: SidebarConfig = toml::from_str(
+            r#"
+            [spaces]
+            rows = [["workspace"]]
+            lines = [[{ field = "status" }]]
+            "#,
+        )
+        .expect("rows parse");
+        assert_eq!(config.spaces.rows, vec![vec![SpaceSidebarToken::Workspace]]);
+    }
+
+    #[test]
+    fn host_config_parses_and_unknown_values_fall_back() {
+        let config: SidebarConfig = toml::from_str(
+            r#"
+            [host]
+            animation = "static"
+            gradient = "sparkly"
+            show_count = true
+            "#,
+        )
+        .expect("host parse");
+        assert_eq!(config.host.animation, HostBannerAnimation::Static);
+        assert_eq!(config.host.gradient, HostBannerGradient::Rainbow);
+        assert!(config.host.show_count);
     }
 }

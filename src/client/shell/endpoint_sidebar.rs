@@ -426,6 +426,12 @@ pub(super) fn render_expanded(
                 let rect = Rect::new(body.x, y, content_width, 1);
                 let collapsed = state.collapsed_endpoints.contains(&endpoint.endpoint_id);
                 let marker = if collapsed { "▸" } else { "▾" };
+                let space_count = rows
+                    .iter()
+                    .filter(
+                        |row| matches!(row, Row::Workspace { endpoint, .. } if *endpoint == *index),
+                    )
+                    .count();
                 let status_badge = render_endpoint_row(
                     buffer,
                     rect,
@@ -434,6 +440,8 @@ pub(super) fn render_expanded(
                     collapsed && &endpoint.endpoint_id == state.active_endpoint_id,
                     state.machine_diagnostics,
                     palette,
+                    &config.sidebar_host,
+                    space_count,
                 );
                 hits.machines.push(MachineHit {
                     rect,
@@ -613,6 +621,8 @@ fn render_endpoint_row(
     highlighted: bool,
     auth: &super::machine_diagnostics::MachineDiagnostics,
     palette: &Palette,
+    host: &crate::config::SidebarHostConfig,
+    space_count: usize,
 ) -> Rect {
     if highlighted {
         buffer.set_style(rect, Style::default().bg(palette.active_row_bg));
@@ -635,22 +645,60 @@ fn render_endpoint_row(
         format!("{glyph} {state}")
     };
     let signal_width = display_width(&signal).min(rect.width);
-    put_text(
-        buffer,
-        rect.x,
-        rect.y,
-        rect.width.saturating_sub(signal_width.saturating_add(1)),
-        &format!(" {marker} {}", endpoint.label),
-        Style::default()
-            .fg(
-                if matches!(endpoint.status, ClientEndpointStatus::Disabled) {
-                    palette.overlay0
-                } else {
-                    palette.text
-                },
-            )
-            .add_modifier(Modifier::BOLD),
-    );
+    let label_width = rect.width.saturating_sub(signal_width.saturating_add(1));
+    let online = endpoint.status == ClientEndpointStatus::Online;
+    let mut prefix = format!(" {marker} ");
+    if host.glyph == crate::config::HostBannerGlyph::Left {
+        prefix.push_str(if online { "◆ " } else { "◇ " });
+    }
+    let prefix_style = Style::default().fg(palette.overlay1);
+    put_text(buffer, rect.x, rect.y, label_width, &prefix, prefix_style);
+    let mut x = rect
+        .x
+        .saturating_add(display_width(&prefix).min(label_width));
+    let label_right = rect.x.saturating_add(label_width);
+    if matches!(endpoint.status, ClientEndpointStatus::Disabled) {
+        put_text(
+            buffer,
+            x,
+            rect.y,
+            label_right.saturating_sub(x),
+            &endpoint.label,
+            Style::default()
+                .fg(palette.overlay0)
+                .add_modifier(Modifier::BOLD),
+        );
+        x = x.saturating_add(display_width(&endpoint.label));
+    } else {
+        let tick = super::host_banner::animation_tick(host);
+        for (index, character) in endpoint.label.chars().enumerate() {
+            if x >= label_right {
+                break;
+            }
+            let color = super::host_banner::color(host, palette, index, tick);
+            put_text(
+                buffer,
+                x,
+                rect.y,
+                label_right.saturating_sub(x),
+                &character.to_string(),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            );
+            x = x.saturating_add(
+                unicode_width::UnicodeWidthChar::width(character).unwrap_or(0) as u16,
+            );
+        }
+    }
+    if host.show_count && online && x < label_right {
+        put_text(
+            buffer,
+            x,
+            rect.y,
+            label_right.saturating_sub(x),
+            &format!(" · {space_count} spaces"),
+            Style::default().fg(palette.overlay0),
+        );
+    }
     put_right_text(
         buffer,
         rect,
