@@ -920,9 +920,11 @@ impl ClientShellState {
             && self.overlay.is_none()
             && self.mode == ClientShellMode::Terminal
             && mouse.kind == MouseEventKind::Down(MouseButton::Left)
-            && mouse
-                .modifiers
-                .contains(crossterm::event::KeyModifiers::CONTROL)
+            && if self.config.url_click_modifiers.is_empty() {
+                mouse.modifiers.is_empty()
+            } else {
+                mouse.modifiers.contains(self.config.url_click_modifiers)
+            }
         {
             if let Some(hit) = self
                 .hits

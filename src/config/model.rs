@@ -195,6 +195,41 @@ fn parse_right_click_passthrough_modifier(value: &str) -> Option<Option<KeyModif
     (!modifiers.is_empty()).then_some(Some(modifiers))
 }
 
+/// Modifier required on a left click to open a pane URL / OSC 8 hyperlink.
+/// Default: ctrl. Set to "none" (or "off"/empty) to open links with a plain
+/// single click — Herdr still consumes the click so it never reaches the pane
+/// app, matching the ctrl+click behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UrlClickModifierConfig(KeyModifiers);
+
+impl Default for UrlClickModifierConfig {
+    fn default() -> Self {
+        Self(KeyModifiers::CONTROL)
+    }
+}
+
+impl UrlClickModifierConfig {
+    pub fn modifiers(self) -> KeyModifiers {
+        self.0
+    }
+}
+
+impl<'de> Deserialize<'de> for UrlClickModifierConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        parse_right_click_passthrough_modifier(&value)
+            .map(|parsed| Self(parsed.unwrap_or_else(KeyModifiers::empty)))
+            .ok_or_else(|| {
+                de::Error::custom(
+                    "url_click_modifier must be empty, off, none, disabled, ctrl/control, alt/option, cmd/command/super, meta, hyper, or a + separated combination without shift",
+                )
+            })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ToastConfig {
     pub delivery: ToastDelivery,
@@ -927,6 +962,9 @@ pub struct UiConfig {
     pub host_cursor: HostCursorModeConfig,
     /// Modifier that lets right-click gestures pass through to pane apps. Empty disables it.
     pub right_click_passthrough_modifier: RightClickPassthroughModifierConfig,
+    /// Modifier required for a left click to open pane URLs / OSC 8 hyperlinks.
+    /// Default: ctrl. Set to "none" for plain single-click link opening.
+    pub url_click_modifier: UrlClickModifierConfig,
     /// Force a full host-terminal redraw when the outer terminal regains focus. Default: true.
     pub redraw_on_focus_gained: bool,
     /// Lines to scroll per mouse wheel notch. Default: 3.
@@ -1176,6 +1214,7 @@ impl Default for UiConfig {
             copy_on_select: true,
             host_cursor: HostCursorModeConfig::Auto,
             right_click_passthrough_modifier: RightClickPassthroughModifierConfig::default(),
+            url_click_modifier: UrlClickModifierConfig::default(),
             redraw_on_focus_gained: true,
             mouse_scroll_lines: None,
             confirm_close: true,
@@ -1211,6 +1250,10 @@ impl UiConfig {
 
     pub fn right_click_passthrough_modifiers(&self) -> Option<KeyModifiers> {
         self.right_click_passthrough_modifier.modifiers()
+    }
+
+    pub fn url_click_modifiers(&self) -> KeyModifiers {
+        self.url_click_modifier.modifiers()
     }
 }
 
