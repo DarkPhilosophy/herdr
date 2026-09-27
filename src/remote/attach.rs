@@ -83,7 +83,12 @@ pub(crate) fn run_remote(remote: RemoteLaunch) -> io::Result<()> {
         false,
     )?;
 
-    run_client_process(&local_socket, &reattach_command, remote.keybindings)
+    run_client_process(
+        &local_socket,
+        &reattach_command,
+        remote.keybindings,
+        &remote.session_env,
+    )
 }
 
 pub(crate) fn check_saved_ssh(target: &str, session: &str) -> io::Result<()> {
@@ -3235,9 +3240,11 @@ fn run_client_process(
     local_socket: &Path,
     reattach_command: &str,
     keybindings: RemoteKeybindings,
+    session_env: &crate::protocol::endpoint::SessionEnvPayload,
 ) -> io::Result<()> {
     let exe = std::env::current_exe()?;
-    let status = Command::new(exe)
+    let mut command = Command::new(exe);
+    command
         .arg("client")
         .env(
             crate::server::socket_paths::CLIENT_SOCKET_PATH_ENV_VAR,
@@ -3246,6 +3253,16 @@ fn run_client_process(
         .env(REATTACH_COMMAND_ENV_VAR, reattach_command)
         .env(REMOTE_KEYBINDINGS_ENV_VAR, keybindings.as_str())
         .env_remove(crate::api::SOCKET_PATH_ENV_VAR)
+        .env_remove(SESSION_ENV_ENV_VAR);
+    if !session_env.tokens.is_empty() || !session_env.env.is_empty() {
+        // The client reads this once right after the handshake and scrubs it from its own
+        // environment, so the values never reach pane processes.
+        command.env(
+            SESSION_ENV_ENV_VAR,
+            serde_json::to_string(session_env).map_err(io::Error::other)?,
+        );
+    }
+    let status = command
         .stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -4157,6 +4174,68 @@ mod tests {
         let remote = remote.unwrap();
         assert_eq!(remote.target, "user@host");
         assert_eq!(remote.keybindings, RemoteKeybindings::Local);
+    }
+
+    #[test]
+    fn extract_remote_args_collects_session_tokens_and_env() {
+        let args: Vec<String> = vec![
+            "herdr".into(),
+            "--remote".into(),
+            "dev".into(),
+            "--token".into(),
+            "KEY=s3cret=x".into(),
+            "--env=MODE=fast".into(),
+        ];
+        let (cleaned, remote) = extract_remote_args(&args).unwrap();
+        assert_eq!(cleaned, vec!["herdr"]);
+        let session_env = remote.unwrap().session_env;
+        assert_eq!(session_env.tokens.len(), 1);
+        assert_eq!(session_env.tokens[0].0, "KEY");
+        assert_eq!(session_env.tokens[0].1.expose(), "s3cret=x");
+        assert_eq!(format!("{:?}", session_env.tokens[0].1), "***");
+        assert_eq!(session_env.env, vec![("MODE".into(), "fast".into())]);
+    }
+
+    #[test]
+    fn extract_remote_args_reads_token_file() {
+        let path = std::env::temp_dir().join(format!(
+            "herdr-remote-token-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, "# comment\n\nA=1\n B = 2\n").unwrap();
+        let args: Vec<String> = vec![
+            "herdr".into(),
+            "--remote=dev".into(),
+            format!("--token={}", path.display()),
+        ];
+        let (_, remote) = extract_remote_args(&args).unwrap();
+        let tokens = remote.unwrap().session_env.tokens;
+        let names: Vec<_> = tokens
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.expose()))
+            .collect();
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(names, vec![("A", "1"), ("B", " 2")]);
+    }
+
+    #[test]
+    fn extract_remote_args_leaves_subcommand_env_and_token_flags_alone() {
+        let args: Vec<String> = vec![
+            "herdr".into(),
+            "workspace".into(),
+            "create".into(),
+            "--env".into(),
+            "A=1".into(),
+            "--token".into(),
+            "abc".into(),
+        ];
+        let (cleaned, remote) = extract_remote_args(&args).unwrap();
+        assert!(remote.is_none());
+        assert_eq!(cleaned, args);
     }
 
     #[test]

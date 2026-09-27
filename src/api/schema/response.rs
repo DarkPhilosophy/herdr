@@ -51,6 +51,10 @@ pub enum ResponseResult {
     SessionSnapshot {
         snapshot: Box<SessionSnapshot>,
     },
+    SessionEnv {
+        tokens: Vec<(String, String)>,
+        env: Vec<(String, String)>,
+    },
     WorkspaceInfo {
         workspace: WorkspaceInfo,
     },

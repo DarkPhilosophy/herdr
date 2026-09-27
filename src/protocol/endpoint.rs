@@ -31,6 +31,17 @@ pub const AGENT_VIEW_PROJECTION_CAPABILITY: &str = "agent_view_projection";
 pub const AGENT_VIEW_PROJECTION_KIND: &str = "endpoint.agent-view.v1";
 pub const AGENT_COMPLETIONS_CAPABILITY: &str = "agent_completions";
 pub const AGENT_COMPLETIONS_KIND: &str = "endpoint.agent-completions.v1";
+/// Client → server: session-scoped `--token`/`--env` values forwarded by `herdr --remote`
+/// for the lifetime of this connection. Servers that do not know this kind ignore it.
+pub const SESSION_ENV_KIND: &str = "herdr.session-env.v1";
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SessionEnvPayload {
+    #[serde(default)]
+    pub tokens: Vec<(String, super::SecretString)>,
+    #[serde(default)]
+    pub env: Vec<(String, String)>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EndpointAgentCompletions {

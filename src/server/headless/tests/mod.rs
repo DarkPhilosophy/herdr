@@ -107,6 +107,7 @@ fn test_headless_server_with_event_hub(event_hub: api::EventHub) -> HeadlessServ
         #[cfg(unix)]
         next_client_id: 1,
         foreground_client_id: None,
+        session_env: HashMap::new(),
         tab_geometry_controllers: HashMap::new(),
         popup_owner_tab_id: None,
         client_shell_boot_id: "test-boot".into(),
@@ -7017,6 +7018,65 @@ fn notification_show_api_forwards_one_semantic_client_notification() {
         }
         other => panic!("expected semantic api notification, got {other:?}"),
     }
+}
+
+#[test]
+fn session_env_api_serves_foreground_client_values_until_disconnect() {
+    let mut server = test_headless_server();
+    let (client_tx, _client_control_rx, _client_rx) = test_client_writer();
+    server.clients.insert(
+        1,
+        ClientConnection::new(
+            (80, 24),
+            crate::kitty_graphics::HostCellSize::default(),
+            1,
+            RenderEncoding::SemanticFrame,
+            Some(client_tx),
+        ),
+    );
+    server.foreground_client_id = Some(1);
+    server.handle_server_event(ServerEvent::ClientSessionEnv {
+        client_id: 1,
+        payload: crate::protocol::endpoint::SessionEnvPayload {
+            tokens: vec![("KEY".into(), crate::protocol::SecretString::new("s3cret"))],
+            env: vec![("MODE".into(), "fast".into())],
+        },
+    });
+
+    let session_env = |server: &mut HeadlessServer| {
+        let (respond_to, response_rx) = std::sync::mpsc::channel();
+        server.handle_api_request_with_shutdown_check(api::ApiRequestMessage {
+            request: api::schema::Request {
+                id: "env".into(),
+                method: api::schema::Method::SessionEnv(api::schema::EmptyParams::default()),
+            },
+            respond_to,
+            response_write_complete: None,
+        });
+        let response = response_rx
+            .recv_timeout(Duration::from_millis(100))
+            .unwrap();
+        serde_json::from_str::<api::schema::SuccessResponse>(&response)
+            .unwrap()
+            .result
+    };
+
+    assert_eq!(
+        session_env(&mut server),
+        api::schema::ResponseResult::SessionEnv {
+            tokens: vec![("KEY".into(), "s3cret".into())],
+            env: vec![("MODE".into(), "fast".into())],
+        }
+    );
+
+    server.handle_server_event(ServerEvent::ClientDisconnected { client_id: 1 });
+    assert_eq!(
+        session_env(&mut server),
+        api::schema::ResponseResult::SessionEnv {
+            tokens: Vec::new(),
+            env: Vec::new(),
+        }
+    );
 }
 
 #[test]

@@ -283,6 +283,7 @@ pub(super) fn do_handshake(
             server_version = %welcome.server_version,
             "endpoint handshake succeeded"
         );
+        forward_session_env(stream);
         return Ok(HandshakeResult {
             encoding: RenderEncoding::SemanticFrame,
             endpoint_methods: Some(welcome.methods),
@@ -300,6 +301,7 @@ pub(super) fn do_handshake(
                 return Err(ClientError::HandshakeRejected { version, error });
             }
             info!(version, ?encoding, "handshake succeeded");
+            forward_session_env(stream);
             Ok(HandshakeResult {
                 encoding,
                 endpoint_methods: None,
@@ -309,6 +311,34 @@ pub(super) fn do_handshake(
         _ => Err(ClientError::Protocol(protocol::FramingError::Io(
             io::Error::new(io::ErrorKind::InvalidData, "expected Welcome message"),
         ))),
+    }
+}
+
+/// Session-scoped `--token`/`--env` values handed over by the `herdr --remote` launcher. Read
+/// once and scrubbed from this process's environment so they never reach child processes; kept
+/// in memory so every reconnect handshake forwards them again.
+static SESSION_ENV_PAYLOAD: std::sync::LazyLock<Option<String>> = std::sync::LazyLock::new(|| {
+    let payload = std::env::var(crate::remote::SESSION_ENV_ENV_VAR).ok();
+    std::env::remove_var(crate::remote::SESSION_ENV_ENV_VAR);
+    payload.filter(|payload| !payload.is_empty())
+});
+
+fn session_env_payload() -> Option<&'static str> {
+    SESSION_ENV_PAYLOAD.as_deref()
+}
+
+/// Best-effort: servers that do not understand the control kind ignore it, and a send failure
+/// never aborts the session.
+fn forward_session_env(stream: &mut LocalStream) {
+    let Some(payload) = session_env_payload() else {
+        return;
+    };
+    let message = ClientMessage::EndpointControl {
+        kind: crate::protocol::endpoint::SESSION_ENV_KIND.into(),
+        data: payload.to_owned(),
+    };
+    if let Err(err) = protocol::write_message(stream, &message) {
+        tracing::warn!(err = %err, "failed to forward remote session env");
     }
 }
 

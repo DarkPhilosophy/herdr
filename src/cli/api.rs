@@ -11,6 +11,7 @@ pub(super) fn run_api_command(args: &[String]) -> std::io::Result<i32> {
     match subcommand {
         "schema" => api_schema(&args[1..]),
         "snapshot" => api_snapshot(&args[1..]),
+        "session-env" => api_session_env(&args[1..]),
         "help" | "--help" | "-h" => {
             print_api_help();
             Ok(0)
@@ -63,6 +64,38 @@ fn api_snapshot(args: &[String]) -> std::io::Result<i32> {
         id: "cli:api:snapshot".into(),
         method: Method::SessionSnapshot(EmptyParams::default()),
     })?)
+}
+
+/// `herdr api session-env` — prints the session-scoped tokens/env forwarded by the foreground
+/// client (`herdr --remote --token/--env`). Line output: `TOKEN NAME=VALUE`, `ENV NAME=VALUE`;
+/// `--json` prints the raw response.
+fn api_session_env(args: &[String]) -> std::io::Result<i32> {
+    let as_json = match args {
+        [] => false,
+        [flag] if flag == "--json" => true,
+        _ => {
+            eprintln!("usage: herdr api session-env [--json]");
+            return Ok(2);
+        }
+    };
+    let response = super::send_request(&Request {
+        id: "cli:api:session-env".into(),
+        method: Method::SessionEnv(EmptyParams::default()),
+    })?;
+    let Some(result) = response.get("result").filter(|_| !as_json) else {
+        return super::print_response(&response);
+    };
+    for (field, prefix) in [("tokens", "TOKEN"), ("env", "ENV")] {
+        let Some(pairs) = result.get(field).and_then(|value| value.as_array()) else {
+            continue;
+        };
+        for pair in pairs {
+            let name = pair.get(0).and_then(|value| value.as_str()).unwrap_or("");
+            let value = pair.get(1).and_then(|value| value.as_str()).unwrap_or("");
+            println!("{prefix} {name}={value}");
+        }
+    }
+    Ok(0)
 }
 
 fn write_schema_file(path: &std::path::Path) -> std::io::Result<()> {

@@ -521,6 +521,11 @@ pub(crate) enum ServerEvent {
     ClientShellMouseCapture { client_id: u64, enabled: bool },
     /// The committed shell asks the server to replay presentation effects before input resumes.
     ClientShellPresentationSync { client_id: u64, token: String },
+    /// A client forwarded session-scoped tokens/env (`herdr --remote --token/--env`).
+    ClientSessionEnv {
+        client_id: u64,
+        payload: crate::protocol::endpoint::SessionEnvPayload,
+    },
     /// A client-owned shell invoked one endpoint operation through this connection.
     ClientShellEndpointRequest {
         client_id: u64,
@@ -1340,6 +1345,17 @@ fn client_read_loop_with_endpoint_controls(
                 ServerEvent::ClientShellPresentationSync {
                     client_id,
                     token: data,
+                }
+            }
+            ClientMessage::EndpointControl { kind, data }
+                if kind == crate::protocol::endpoint::SESSION_ENV_KIND =>
+            {
+                match serde_json::from_str(&data) {
+                    Ok(payload) => ServerEvent::ClientSessionEnv { client_id, payload },
+                    Err(error) => {
+                        debug!(client_id, %error, "ignoring malformed session env");
+                        continue;
+                    }
                 }
             }
             ClientMessage::EndpointControl { kind, data } => {

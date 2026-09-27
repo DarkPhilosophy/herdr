@@ -195,6 +195,9 @@ pub struct HeadlessServer {
     next_client_id: u64,
     /// The client currently driving session-wide host presentation and side effects.
     foreground_client_id: Option<u64>,
+    /// Session-scoped tokens/env forwarded per client (`herdr --remote --token/--env`) for the
+    /// lifetime of its connection; purged on detach/disconnect. Tokens are never logged.
+    session_env: HashMap<u64, crate::protocol::endpoint::SessionEnvPayload>,
     /// Ephemeral shell connection controlling PTY geometry for each stable tab id.
     tab_geometry_controllers: HashMap<String, u64>,
     /// Stable tab id whose viewers may see and interact with the one terminal popup.
@@ -340,6 +343,7 @@ impl HeadlessServer {
             #[cfg(unix)]
             next_client_id: 1,
             foreground_client_id: None,
+            session_env: HashMap::new(),
             tab_geometry_controllers: HashMap::new(),
             popup_owner_tab_id: None,
             client_shell_boot_id: format!(
@@ -2275,6 +2279,12 @@ impl HeadlessServer {
                 client.host_mouse_capture_active = None;
                 true
             }
+            ServerEvent::ClientSessionEnv { client_id, payload } => {
+                if self.clients.contains_key(&client_id) {
+                    self.session_env.insert(client_id, payload);
+                }
+                false
+            }
             ServerEvent::ClientShellPresentationSync { client_id, token } => {
                 let Some(client) = self.clients.get_mut(&client_id) else {
                     return false;
@@ -2558,11 +2568,13 @@ impl HeadlessServer {
             ServerEvent::ClientDetach { client_id } => {
                 info!(client_id, "client detached");
                 self.send_terminal_stream_detach_shutdown(client_id);
+                self.session_env.remove(&client_id);
                 self.remove_client_and_resize_if_needed(client_id);
                 true
             }
             ServerEvent::ClientDisconnected { client_id } => {
                 info!(client_id, "client disconnected");
+                self.session_env.remove(&client_id);
                 self.remove_client_and_resize_if_needed(client_id);
                 true
             }
@@ -2839,6 +2851,29 @@ impl HeadlessServer {
         };
 
         let metadata_expired = self.app.expire_due_metadata(Instant::now());
+        if let api::schema::Method::SessionEnv(_) = &msg.request.method {
+            // Served from the headless server, which owns the per-client store: returns the
+            // foreground client's forwarded tokens/env (the controlled egress for plugins).
+            let payload = self
+                .foreground_client_id
+                .and_then(|client_id| self.session_env.get(&client_id))
+                .cloned()
+                .unwrap_or_default();
+            let response = serde_json::to_string(&api::schema::SuccessResponse {
+                id: msg.request.id,
+                result: api::schema::ResponseResult::SessionEnv {
+                    tokens: payload
+                        .tokens
+                        .into_iter()
+                        .map(|(name, value)| (name, value.expose().to_string()))
+                        .collect(),
+                    env: payload.env,
+                },
+            })
+            .unwrap_or_else(|_| "{}".to_string());
+            let _ = msg.respond_to.send(response);
+            return false;
+        }
         if let api::schema::Method::ServerLiveHandoff(params) = &msg.request.method {
             let handoff_result = self.perform_live_handoff(params.clone());
             let handoff_succeeded = handoff_result.is_ok();
