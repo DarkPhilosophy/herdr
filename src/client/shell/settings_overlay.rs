@@ -58,7 +58,7 @@ pub(super) fn render_settings_overlay(
         inner.x,
         inner.y,
         inner.width,
-        " settings",
+        " Settings",
         Style::default()
             .fg(palette.text)
             .bg(palette.panel_bg)
@@ -72,7 +72,9 @@ pub(super) fn render_settings_overlay(
             .any(|integration| integration.state == crate::api::schema::IntegrationState::Outdated);
     let mut tab_x = inner.x;
     let mut tab_hits = Vec::new();
-    for section in ClientSettingsSection::ALL {
+    let (first_tab, last_tab) =
+        visible_tab_window(settings.section, integration_badge, inner.width);
+    for section in &ClientSettingsSection::ALL[first_tab..=last_tab] {
         let badge = *section == ClientSettingsSection::Integrations && integration_badge;
         let label = if badge {
             format!(" ● {} ", section.label())
@@ -194,28 +196,48 @@ pub(super) fn render_settings_overlay(
                 &mut choice_hits,
             );
         }
+        ClientSettingsSection::Plugins => {
+            render_plugins(buffer, content, settings, palette, &mut choice_hits);
+        }
         ClientSettingsSection::Integrations => {
-            render_integrations(buffer, content, settings, palette);
+            render_integrations(buffer, content, settings, palette, &mut choice_hits);
         }
     }
 
-    let installable = settings
-        .integrations
-        .iter()
-        .any(super::super::settings::integration_needs_install);
-    let show_primary = settings.section != ClientSettingsSection::Integrations || installable;
-    let labels = if show_primary { vec![10, 12] } else { vec![12] };
+    let primary_label = match settings.section {
+        ClientSettingsSection::Plugins => settings.plugins.get(settings.selected).map(|plugin| {
+            if plugin.enabled {
+                " ↵ disable "
+            } else {
+                " ↵ enable "
+            }
+        }),
+        ClientSettingsSection::Integrations => settings
+            .integrations
+            .get(settings.selected)
+            .and_then(|integration| match integration.state {
+                crate::api::schema::IntegrationState::Current => Some(" ↵ uninstall "),
+                crate::api::schema::IntegrationState::Outdated => Some(" ↵ update "),
+                crate::api::schema::IntegrationState::NotInstalled if integration.available => {
+                    Some(" ↵ install ")
+                }
+                crate::api::schema::IntegrationState::NotInstalled => None,
+            }),
+        _ => Some(" ↵ apply "),
+    };
+    let show_primary = primary_label.is_some();
+    let labels = if show_primary {
+        vec![display_width(primary_label.unwrap_or_default()) as u16, 12]
+    } else {
+        vec![12]
+    };
     let buttons = row(inner, &labels, 2, inner.height.saturating_sub(1));
     let (primary, close) = if show_primary {
         let primary = buttons[0];
         button(
             buffer,
             primary,
-            if settings.section == ClientSettingsSection::Integrations {
-                " ↵ install "
-            } else {
-                " ↵ apply "
-            },
+            primary_label.unwrap_or_default(),
             Style::default()
                 .fg(contrast(palette))
                 .bg(palette.accent)
@@ -295,18 +317,150 @@ fn render_choice_section(
     }
 }
 
-fn render_integrations(
+/// Width of one settings tab cell, including the separating column that follows it.
+fn tab_cell_width(section: ClientSettingsSection, integration_badge: bool) -> u16 {
+    let badge = u16::from(section == ClientSettingsSection::Integrations && integration_badge) * 2;
+    display_width(section.label()) as u16 + 2 + badge + 1
+}
+
+/// Inclusive window of `ClientSettingsSection::ALL` shown in the tab row. When every tab does
+/// not fit, the window grows around the selected tab instead of truncating the row's end, so
+/// the active section is always visible on narrow popups.
+fn visible_tab_window(
+    selected: ClientSettingsSection,
+    integration_badge: bool,
+    available: u16,
+) -> (usize, usize) {
+    let all = ClientSettingsSection::ALL;
+    let cell = |index: usize| tab_cell_width(all[index], integration_badge);
+    let last = all.len().saturating_sub(1);
+    let budget = available.saturating_add(1);
+    if (0..=last).map(cell).sum::<u16>() <= budget {
+        return (0, last);
+    }
+    let selected = all
+        .iter()
+        .position(|section| *section == selected)
+        .unwrap_or(0);
+    let (mut lo, mut hi) = (selected, selected);
+    let mut used = cell(selected);
+    loop {
+        if lo > 0 && used + cell(lo - 1) <= budget {
+            lo -= 1;
+            used += cell(lo);
+        } else if hi < last && used + cell(hi + 1) <= budget {
+            hi += 1;
+            used += cell(hi);
+        } else {
+            return (lo, hi);
+        }
+    }
+}
+
+fn render_plugins(
     buffer: &mut Buffer,
     area: Rect,
     settings: &ClientSettingsOverlay,
     palette: &Palette,
+    hits: &mut Vec<(Rect, usize)>,
 ) {
     put_text(
         buffer,
         area.x,
         area.y,
         area.width,
-        "agent integrations",
+        "Plugins",
+        Style::default()
+            .fg(palette.text)
+            .bg(palette.panel_bg)
+            .add_modifier(Modifier::BOLD),
+    );
+    put_text(
+        buffer,
+        area.x,
+        area.y + 1,
+        area.width,
+        "enable or disable installed plugins",
+        Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+    );
+    let list_y = area.y.saturating_add(3);
+    if settings.plugins.is_empty() {
+        let text = if settings.loading_plugins {
+            " loading plugins…"
+        } else {
+            " no plugins installed"
+        };
+        put_text(
+            buffer,
+            area.x,
+            list_y,
+            area.width,
+            text,
+            Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+        );
+        return;
+    }
+    let message_rows = settings.plugin_messages.len().min(3) as u16;
+    let visible = usize::from(
+        area.bottom()
+            .saturating_sub(list_y)
+            .saturating_sub(message_rows)
+            .max(1),
+    );
+    let scroll = settings.selected.saturating_sub(visible.saturating_sub(1));
+    for (row, (index, plugin)) in settings
+        .plugins
+        .iter()
+        .enumerate()
+        .skip(scroll)
+        .take(visible)
+        .enumerate()
+    {
+        let rect = Rect::new(area.x, list_y + row as u16, area.width, 1);
+        let selected = index == settings.selected;
+        let style = choice_style(selected, palette);
+        buffer.set_style(rect, style);
+        let marker = if selected { "▸" } else { " " };
+        let check = if plugin.enabled { "[✓]" } else { "[ ]" };
+        put_text(
+            buffer,
+            rect.x,
+            rect.y,
+            rect.width,
+            &format!(" {marker} {check} {}  {}", plugin.name, plugin.version),
+            style,
+        );
+        hits.push((rect, index));
+    }
+    for (offset, message) in settings.plugin_messages.iter().take(3).enumerate() {
+        let y = area
+            .bottom()
+            .saturating_sub(message_rows)
+            .saturating_add(offset as u16);
+        put_text(
+            buffer,
+            area.x,
+            y,
+            area.width,
+            &format!(" {message}"),
+            Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+        );
+    }
+}
+
+fn render_integrations(
+    buffer: &mut Buffer,
+    area: Rect,
+    settings: &ClientSettingsOverlay,
+    palette: &Palette,
+    hits: &mut Vec<(Rect, usize)>,
+) {
+    put_text(
+        buffer,
+        area.x,
+        area.y,
+        area.width,
+        "Agent integrations",
         Style::default()
             .fg(palette.text)
             .bg(palette.panel_bg)
@@ -359,13 +513,21 @@ fn render_integrations(
                 ("–", palette.overlay0, "not found")
             }
         };
+        let row_rect = Rect::new(area.x, y, area.width, 1);
+        let row_bg = if index == settings.selected {
+            palette.surface0
+        } else {
+            palette.panel_bg
+        };
+        buffer.set_style(row_rect, Style::default().bg(row_bg));
+        hits.push((row_rect, index));
         put_text(
             buffer,
             area.x,
             y,
             3,
             &format!(" {marker}"),
-            Style::default().fg(color).bg(palette.panel_bg),
+            Style::default().fg(color).bg(row_bg),
         );
         put_text(
             buffer,
@@ -373,7 +535,7 @@ fn render_integrations(
             y,
             11.min(area.width.saturating_sub(3)),
             &format!("{:<9}", integration.label),
-            Style::default().fg(palette.subtext0).bg(palette.panel_bg),
+            Style::default().fg(palette.subtext0).bg(row_bg),
         );
         put_text(
             buffer,
@@ -381,7 +543,7 @@ fn render_integrations(
             y,
             area.width.saturating_sub(14),
             status,
-            Style::default().fg(palette.overlay1).bg(palette.panel_bg),
+            Style::default().fg(palette.overlay1).bg(row_bg),
         );
     }
     let message_y = area

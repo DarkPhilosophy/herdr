@@ -46,7 +46,8 @@ pub(super) fn command() -> Command {
         .subcommand(terminal_command())
         .subcommand(session_command())
         .subcommand(integration_command())
-        .subcommand(plugin_command());
+        .subcommand(plugin_command())
+        .subcommand(sidebar_command());
     configure_help(command, 0)
 }
 
@@ -768,6 +769,20 @@ fn integration_command() -> Command {
             Command::new("status")
                 .about("Show integration status")
                 .arg(flag("outdated-only")),
+        )
+}
+
+fn sidebar_command() -> Command {
+    Command::new("sidebar")
+        .about("Publish custom sidebar sections")
+        .subcommand(
+            Command::new("report-section")
+                .about("Read section params JSON from stdin and publish it")
+                .arg(
+                    flag("stdin")
+                        .required(true)
+                        .help("Read the sidebar.report_section params object from stdin"),
+                ),
         )
 }
 

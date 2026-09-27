@@ -42,6 +42,9 @@ impl ClientShellState {
             integration_messages: Vec::new(),
             loading_integrations: false,
             installing_integrations: false,
+            plugins: Vec::new(),
+            loading_plugins: false,
+            plugin_messages: Vec::new(),
         }));
     }
 
@@ -51,7 +54,7 @@ impl ClientShellState {
             ClientSettingsSection::Indicators => indicator_index(self.config.status_indicators),
             ClientSettingsSection::Sound => usize::from(!self.config.sound_enabled),
             ClientSettingsSection::Toast => toast_index(self.config.toast_delivery),
-            ClientSettingsSection::Integrations => 0,
+            ClientSettingsSection::Plugins | ClientSettingsSection::Integrations => 0,
         }
     }
 
@@ -61,6 +64,14 @@ impl ClientShellState {
         outcome: &mut ClientShellInput,
     ) {
         let selected = self.selected_index_for_settings_section(section);
+        let request_plugins = section == ClientSettingsSection::Plugins
+            && matches!(
+                self.overlay.as_ref(),
+                Some(ClientShellOverlay::Settings(ClientSettingsOverlay {
+                    loading_plugins: false,
+                    ..
+                }))
+            );
         let request_integrations = matches!(section, ClientSettingsSection::Integrations)
             && matches!(
                 self.overlay,
@@ -73,6 +84,9 @@ impl ClientShellState {
         if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
             settings.section = section;
             settings.selected = selected;
+        }
+        if request_plugins {
+            self.queue_plugin_list(outcome, true);
         }
         if request_integrations {
             self.queue_integration_list(outcome, true);
@@ -99,6 +113,7 @@ impl ClientShellState {
                 ClientSettingsSection::Theme => crate::config::THEME_NAMES.len(),
                 ClientSettingsSection::Indicators | ClientSettingsSection::Sound => 2,
                 ClientSettingsSection::Toast => 4,
+                ClientSettingsSection::Plugins => settings.plugins.len(),
                 ClientSettingsSection::Integrations => settings.integrations.len(),
             },
             _ => 0,
@@ -222,7 +237,8 @@ impl ClientShellState {
                     outcome,
                 );
             }
-            ClientSettingsSection::Integrations => self.install_recommended_integrations(outcome),
+            ClientSettingsSection::Plugins => self.toggle_selected_plugin(outcome),
+            ClientSettingsSection::Integrations => self.toggle_selected_integration(outcome),
         }
     }
 
@@ -244,6 +260,98 @@ impl ClientShellState {
         }
     }
 
+    fn queue_plugin_list(&mut self, outcome: &mut ClientShellInput, clear_messages: bool) {
+        if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+            settings.loading_plugins = true;
+            if clear_messages {
+                settings.plugin_messages.clear();
+            }
+        }
+        if !self.push_endpoint_method_with_kind(
+            crate::api::schema::Method::PluginList(crate::api::schema::PluginListParams::default()),
+            PendingEndpointKind::PluginList,
+            outcome,
+        ) {
+            if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+                settings.loading_plugins = false;
+            }
+        }
+    }
+
+    /// Enter/space on a plugin row flips its enabled state.
+    fn toggle_selected_plugin(&mut self, outcome: &mut ClientShellInput) {
+        let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_ref() else {
+            return;
+        };
+        if settings.loading_plugins {
+            return;
+        }
+        let Some(plugin) = settings.plugins.get(settings.selected) else {
+            return;
+        };
+        let params = crate::api::schema::PluginSetEnabledParams {
+            plugin_id: plugin.plugin_id.clone(),
+        };
+        let method = if plugin.enabled {
+            crate::api::schema::Method::PluginDisable(params)
+        } else {
+            crate::api::schema::Method::PluginEnable(params)
+        };
+        if self.push_endpoint_method_with_kind(method, PendingEndpointKind::PluginToggle, outcome) {
+            if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+                settings.loading_plugins = true;
+            }
+            outcome.repaint = true;
+        }
+    }
+
+    /// Enter/space on an integration row installs it when missing or outdated, and uninstalls
+    /// it when current. Outdated means update, never uninstall.
+    fn toggle_selected_integration(&mut self, outcome: &mut ClientShellInput) {
+        if self.pending_integration_installs > 0 {
+            return;
+        }
+        let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_ref() else {
+            return;
+        };
+        let Some(integration) = settings.integrations.get(settings.selected) else {
+            return;
+        };
+        let target = integration.target;
+        let (method, kind) = match integration.state {
+            crate::api::schema::IntegrationState::Current => (
+                crate::api::schema::Method::IntegrationUninstall(
+                    crate::api::schema::IntegrationUninstallParams { target },
+                ),
+                PendingEndpointKind::IntegrationUninstall,
+            ),
+            crate::api::schema::IntegrationState::Outdated => (
+                crate::api::schema::Method::IntegrationInstall(
+                    crate::api::schema::IntegrationInstallParams { target },
+                ),
+                PendingEndpointKind::IntegrationInstall,
+            ),
+            crate::api::schema::IntegrationState::NotInstalled if integration.available => (
+                crate::api::schema::Method::IntegrationInstall(
+                    crate::api::schema::IntegrationInstallParams { target },
+                ),
+                PendingEndpointKind::IntegrationInstall,
+            ),
+            crate::api::schema::IntegrationState::NotInstalled => return,
+        };
+        if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+            settings.installing_integrations = true;
+            settings.integration_messages.clear();
+        }
+        if self.push_endpoint_method_with_kind(method, kind, outcome) {
+            self.pending_integration_installs += 1;
+        } else if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+            settings.installing_integrations = false;
+        }
+        outcome.repaint = true;
+    }
+
+    #[allow(dead_code)] // kept for the recommended bulk-install flow.
     fn install_recommended_integrations(&mut self, outcome: &mut ClientShellInput) {
         if self.pending_integration_installs > 0 {
             return;
@@ -290,6 +398,64 @@ impl ClientShellState {
         result: Result<crate::api::schema::ResponseResult, ClientShellEndpointError>,
     ) -> (bool, Vec<ClientShellAction>) {
         match kind {
+            PendingEndpointKind::PluginList => {
+                if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+                    settings.loading_plugins = false;
+                    match result {
+                        Ok(crate::api::schema::ResponseResult::PluginList { mut plugins }) => {
+                            plugins.sort_by_key(|plugin| plugin.name.to_lowercase());
+                            settings.plugins = plugins;
+                            if settings.section == ClientSettingsSection::Plugins {
+                                settings.selected = settings
+                                    .selected
+                                    .min(settings.plugins.len().saturating_sub(1));
+                            }
+                        }
+                        Ok(_) => settings
+                            .plugin_messages
+                            .push("endpoint returned an unexpected plugin list result".into()),
+                        Err(error) => settings.plugin_messages.push(error.message),
+                    }
+                }
+                (true, Vec::new())
+            }
+            PendingEndpointKind::PluginToggle => {
+                let mut deferred = ClientShellInput::default();
+                if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+                    settings.loading_plugins = false;
+                    if let Err(error) = result {
+                        settings.plugin_messages.push(error.message);
+                    }
+                }
+                if matches!(self.overlay, Some(ClientShellOverlay::Settings(_))) {
+                    self.queue_plugin_list(&mut deferred, false);
+                }
+                (true, deferred.actions)
+            }
+            PendingEndpointKind::IntegrationUninstall => {
+                self.pending_integration_installs =
+                    self.pending_integration_installs.saturating_sub(1);
+                let mut deferred = ClientShellInput::default();
+                if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
+                    match result {
+                        Ok(crate::api::schema::ResponseResult::IntegrationUninstall {
+                            details,
+                            ..
+                        }) => settings.integration_messages.extend(details.messages),
+                        Ok(_) => settings
+                            .integration_messages
+                            .push("endpoint returned an unexpected integration result".into()),
+                        Err(error) => settings.integration_messages.push(error.message),
+                    }
+                    settings.installing_integrations = self.pending_integration_installs > 0;
+                }
+                if self.pending_integration_installs == 0
+                    && matches!(self.overlay, Some(ClientShellOverlay::Settings(_)))
+                {
+                    self.queue_integration_list(&mut deferred, false);
+                }
+                (true, deferred.actions)
+            }
             PendingEndpointKind::IntegrationList => {
                 if let Some(ClientShellOverlay::Settings(settings)) = self.overlay.as_mut() {
                     settings.loading_integrations = false;

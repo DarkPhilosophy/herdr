@@ -391,6 +391,7 @@ pub(super) enum ClientSettingsSection {
     Indicators,
     Sound,
     Toast,
+    Plugins,
     Integrations,
 }
 
@@ -400,16 +401,18 @@ impl ClientSettingsSection {
         Self::Indicators,
         Self::Sound,
         Self::Toast,
+        Self::Plugins,
         Self::Integrations,
     ];
 
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Theme => "theme",
-            Self::Indicators => "indicators",
-            Self::Sound => "sound",
-            Self::Toast => "toasts",
-            Self::Integrations => "integrations",
+            Self::Theme => "Theme",
+            Self::Indicators => "Indicators",
+            Self::Sound => "Sound",
+            Self::Toast => "Toasts",
+            Self::Plugins => "Plugins",
+            Self::Integrations => "Integrations",
         }
     }
 }
@@ -424,6 +427,10 @@ pub(super) struct ClientSettingsOverlay {
     pub(super) integration_messages: Vec<String>,
     pub(super) loading_integrations: bool,
     pub(super) installing_integrations: bool,
+    /// Installed plugins sorted by name, as rendered in the Plugins section.
+    pub(super) plugins: Vec<crate::api::schema::InstalledPluginInfo>,
+    pub(super) loading_plugins: bool,
+    pub(super) plugin_messages: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -629,6 +636,9 @@ pub(super) enum PendingEndpointKind {
     ReloadConfig,
     IntegrationList,
     IntegrationInstall,
+    IntegrationUninstall,
+    PluginList,
+    PluginToggle,
     PrepareWorktreeCreate {
         workspace_id: String,
     },

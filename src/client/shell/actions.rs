@@ -821,7 +821,10 @@ impl ClientShellState {
                 return (repaint, Vec::new());
             }
             kind @ (PendingEndpointKind::IntegrationList
-            | PendingEndpointKind::IntegrationInstall) => {
+            | PendingEndpointKind::IntegrationInstall
+            | PendingEndpointKind::IntegrationUninstall
+            | PendingEndpointKind::PluginList
+            | PendingEndpointKind::PluginToggle) => {
                 return self.handle_settings_endpoint_result(kind, result);
             }
             kind => {

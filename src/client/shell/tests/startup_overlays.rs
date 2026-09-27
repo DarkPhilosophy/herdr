@@ -1049,7 +1049,7 @@ fn outdated_integration_badges_launcher_settings_and_settings_tab() {
         .iter()
         .map(|cell| cell.symbol.as_str())
         .collect::<String>();
-    assert!(settings_text.contains("● integrations"));
+    assert!(settings_text.contains("● Integrations"));
     let integrations_tab = state
         .hits
         .settings_tabs
@@ -1180,6 +1180,12 @@ fn client_settings_preview_restore_and_endpoint_integrations_are_owned_by_overla
         let next = state.handle_input_bytes(b"\t");
         assert!(next.actions.is_empty());
     }
+    let plugins = state.handle_input_bytes(b"\t");
+    assert!(matches!(
+        &plugins.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(request.method, crate::api::schema::Method::PluginList(_))
+    ));
     let integrations = state.handle_input_bytes(b"\t");
     let [ClientShellAction::Endpoint { request, .. }] = &integrations.actions[..] else {
         panic!("integration section should request endpoint status");
@@ -1292,5 +1298,166 @@ fn client_settings_preview_restore_and_endpoint_integrations_are_owned_by_overla
             ref integration_messages,
             ..
         })) if integration_messages == &["installed codex"]
+    ));
+}
+
+fn test_plugin(id: &str, name: &str, enabled: bool) -> crate::api::schema::InstalledPluginInfo {
+    serde_json::from_value(serde_json::json!({
+        "plugin_id": id,
+        "name": name,
+        "version": "0.1.0",
+        "manifest_path": "",
+        "plugin_root": "",
+        "enabled": enabled,
+    }))
+    .expect("plugin info")
+}
+
+fn settings_state_for_test() -> ClientShellState {
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&Config::default()));
+    state.set_snapshot(Box::new(snapshot()));
+    state.set_pane_surface(surface());
+    state.open_settings_overlay();
+    state
+}
+
+fn endpoint_request_id(actions: &[ClientShellAction]) -> String {
+    match actions {
+        [ClientShellAction::Endpoint { request, .. }] => request.id.clone(),
+        other => panic!("expected one endpoint request, got {}", other.len()),
+    }
+}
+
+#[test]
+fn settings_plugins_section_lists_sorted_plugins_and_toggles_selected() {
+    let mut state = settings_state_for_test();
+    let mut outcome = ClientShellInput::default();
+    state.select_settings_section(ClientSettingsSection::Plugins, &mut outcome);
+    assert!(matches!(
+        &outcome.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(request.method, crate::api::schema::Method::PluginList(_))
+    ));
+    let request_id = endpoint_request_id(&outcome.actions);
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::PluginList {
+            plugins: vec![
+                test_plugin("z.usage", "Usage Monitor", true),
+                test_plugin("a.manager", "Plugin Manager", false),
+            ],
+        }),
+    );
+    let frame = state.compose(106, 30).expect("plugins section");
+    let text = frame
+        .cells
+        .iter()
+        .map(|cell| cell.symbol.as_str())
+        .collect::<String>();
+    let manager = text
+        .find("[ ] Plugin Manager")
+        .expect("disabled plugin row");
+    let usage = text.find("[✓] Usage Monitor").expect("enabled plugin row");
+    assert!(manager < usage, "plugins render sorted by name");
+
+    // Row 0 is the disabled Plugin Manager: Enter enables it, then the list refreshes.
+    let toggle = state.handle_input_bytes(b"\r");
+    assert!(matches!(
+        &toggle.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if request.method
+                == crate::api::schema::Method::PluginEnable(
+                    crate::api::schema::PluginSetEnabledParams {
+                        plugin_id: "a.manager".into(),
+                    }
+                )
+    ));
+    let (_, refresh) = state.handle_endpoint_result(
+        "boot-1",
+        &endpoint_request_id(&toggle.actions),
+        Ok(crate::api::schema::ResponseResult::PluginList {
+            plugins: Vec::new(),
+        }),
+    );
+    assert!(matches!(
+        refresh.as_slice(),
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(request.method, crate::api::schema::Method::PluginList(_))
+    ));
+}
+
+#[test]
+fn settings_integration_enter_uninstalls_current_and_updates_outdated() {
+    let mut state = settings_state_for_test();
+    let mut outcome = ClientShellInput::default();
+    state.select_settings_section(ClientSettingsSection::Integrations, &mut outcome);
+    let request_id = endpoint_request_id(&outcome.actions);
+    let info = |target, label: &str, state| crate::api::schema::IntegrationInfo {
+        target,
+        label: label.into(),
+        command: label.into(),
+        available: true,
+        state,
+    };
+    state.handle_endpoint_result(
+        "boot-1",
+        &request_id,
+        Ok(crate::api::schema::ResponseResult::IntegrationList {
+            integrations: vec![
+                info(
+                    crate::api::schema::IntegrationTarget::Claude,
+                    "claude",
+                    crate::api::schema::IntegrationState::Current,
+                ),
+                info(
+                    crate::api::schema::IntegrationTarget::Codex,
+                    "codex",
+                    crate::api::schema::IntegrationState::Outdated,
+                ),
+            ],
+        }),
+    );
+    let uninstall = state.handle_input_bytes(b"\r");
+    assert!(matches!(
+        &uninstall.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                request.method,
+                crate::api::schema::Method::IntegrationUninstall(
+                    crate::api::schema::IntegrationUninstallParams {
+                        target: crate::api::schema::IntegrationTarget::Claude
+                    }
+                )
+            )
+    ));
+    let (_, refresh) = state.handle_endpoint_result(
+        "boot-1",
+        &endpoint_request_id(&uninstall.actions),
+        Ok(crate::api::schema::ResponseResult::IntegrationUninstall {
+            target: crate::api::schema::IntegrationTarget::Claude,
+            details: serde_json::from_value(serde_json::json!({ "messages": [] }))
+                .expect("uninstall details"),
+        }),
+    );
+    assert!(matches!(
+        refresh.as_slice(),
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(request.method, crate::api::schema::Method::IntegrationList(_))
+    ));
+
+    state.handle_input_bytes(b"j");
+    let update = state.handle_input_bytes(b"\r");
+    assert!(matches!(
+        &update.actions[..],
+        [ClientShellAction::Endpoint { request, .. }]
+            if matches!(
+                request.method,
+                crate::api::schema::Method::IntegrationInstall(
+                    crate::api::schema::IntegrationInstallParams {
+                        target: crate::api::schema::IntegrationTarget::Codex
+                    }
+                )
+            )
     ));
 }
