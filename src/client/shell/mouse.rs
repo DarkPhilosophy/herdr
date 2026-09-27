@@ -22,7 +22,11 @@ impl ClientShellState {
     }
 
     fn set_sidebar_section_from_row(&mut self, row: u16, outcome: &mut ClientShellInput) {
-        let divider = self.hits.sidebar_divider;
+        let divider = if self.hits.sidebar_split_area.height > 0 {
+            self.hits.sidebar_split_area
+        } else {
+            self.hits.sidebar_divider
+        };
         if divider.height == 0 {
             return;
         }

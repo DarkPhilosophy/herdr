@@ -827,6 +827,8 @@ pub struct AppState {
     pub agent_panel_sort: AgentPanelSort,
     /// Transient session-wide projection override for the built-in Agents view.
     pub agent_view_override: Option<crate::api::schema::AgentViewSetParams>,
+    /// API-fed custom sidebar section rows (`sidebar.report_section`), keyed by section id.
+    pub(crate) sidebar_section_reports: crate::app::sidebar_sections::SidebarSections,
     pub sidebar_agents: crate::config::AgentsSidebarConfig,
     pub sidebar_spaces: crate::config::SpacesSidebarConfig,
     pub next_agent_state_change_seq: u64,
@@ -1054,6 +1056,7 @@ impl AppState {
             ),
             agent_panel_sort: AgentPanelSort::Spaces,
             agent_view_override: None,
+            sidebar_section_reports: Default::default(),
             sidebar_agents: crate::config::AgentsSidebarConfig::default(),
             sidebar_spaces: crate::config::SpacesSidebarConfig::default(),
             next_agent_state_change_seq: 0,

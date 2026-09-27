@@ -273,6 +273,7 @@ impl AppState {
                     .iter()
                     .filter_map(|workspace| workspace.metadata_tokens.next_expiry()),
             )
+            .chain(self.sidebar_section_reports.next_expiry())
             .min()
     }
 

@@ -475,11 +475,117 @@ impl Default for SpacesSidebarConfig {
     }
 }
 
+const DEFAULT_CUSTOM_SECTION_MAX_ROWS: u16 = 12;
+const MIN_CUSTOM_SECTION_MAX_ROWS: u16 = 1;
+const MAX_CUSTOM_SECTION_MAX_ROWS: u16 = 24;
+
+fn default_custom_section_max_rows() -> u16 {
+    DEFAULT_CUSTOM_SECTION_MAX_ROWS
+}
+
+fn deserialize_custom_section_max_rows<'de, D>(deserializer: D) -> Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(u16::deserialize(deserializer)?
+        .clamp(MIN_CUSTOM_SECTION_MAX_ROWS, MAX_CUSTOM_SECTION_MAX_ROWS))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarSectionPlacement {
+    #[default]
+    BelowAgents,
+}
+
+/// One API-fed sidebar section (`sidebar.report_section`) the client shows.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(default)]
+pub struct CustomSidebarSectionConfig {
+    pub id: String,
+    pub title: Option<String>,
+    /// Pane metadata token whose focused value marks matching bar rows.
+    pub highlight_token: Option<String>,
+    #[serde(
+        default = "default_custom_section_max_rows",
+        deserialize_with = "deserialize_custom_section_max_rows"
+    )]
+    pub max_rows: u16,
+    pub placement: SidebarSectionPlacement,
+}
+
+impl Default for CustomSidebarSectionConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            title: None,
+            highlight_token: None,
+            max_rows: default_custom_section_max_rows(),
+            placement: SidebarSectionPlacement::BelowAgents,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub struct SidebarConfig {
     pub agents: AgentsSidebarConfig,
     pub spaces: SpacesSidebarConfig,
+    pub sections: Vec<CustomSidebarSectionConfig>,
+}
+
+impl SidebarConfig {
+    pub(crate) fn resolved_sections(&self) -> Vec<CustomSidebarSectionConfig> {
+        self.validated_sections().0
+    }
+
+    pub(crate) fn section_diagnostics(&self) -> Vec<String> {
+        self.validated_sections().1
+    }
+
+    fn validated_sections(&self) -> (Vec<CustomSidebarSectionConfig>, Vec<String>) {
+        let mut sections = Vec::new();
+        let mut diagnostics = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for (index, section) in self.sections.iter().enumerate() {
+            if !sidebar_section_id_is_valid(&section.id) {
+                diagnostics.push(format!(
+                    "invalid sidebar section id: ui.sidebar.sections[{index}].id = {:?}; ignoring section",
+                    section.id
+                ));
+                continue;
+            }
+            if !seen.insert(section.id.as_str()) {
+                diagnostics.push(format!(
+                    "duplicate sidebar section id: ui.sidebar.sections[{index}].id = {:?}; ignoring section",
+                    section.id
+                ));
+                continue;
+            }
+            let mut section = section.clone();
+            if section
+                .highlight_token
+                .as_deref()
+                .is_some_and(|token| !sidebar_section_id_is_valid(token))
+            {
+                diagnostics.push(format!(
+                    "invalid sidebar section highlight token: ui.sidebar.sections[{index}].highlight_token = {:?}; disabling row highlighting",
+                    section.highlight_token
+                ));
+                section.highlight_token = None;
+            }
+            sections.push(section);
+        }
+        (sections, diagnostics)
+    }
+}
+
+fn sidebar_section_id_is_valid(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 32
+        && id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
 }
 
 #[cfg(test)]
@@ -725,5 +831,121 @@ rows = [[{ token = "$status", rules = [{ contains = "error", bold = true }] }]]
                 "accepted key {key:?}"
             );
         }
+    }
+
+    #[test]
+    fn parses_custom_sections_and_clamps_max_rows() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[[ui.sidebar.sections]]
+id = "build"
+title = "Build status"
+highlight_token = "vault_broker"
+max_rows = 99
+placement = "below_agents"
+
+[[ui.sidebar.sections]]
+id = "deploy"
+placement = "below_agents"
+
+[[ui.sidebar.sections]]
+id = "minimum"
+max_rows = 0
+placement = "below_agents"
+"#,
+        )
+        .expect("custom sections");
+
+        assert_eq!(
+            config.ui.sidebar.sections,
+            vec![
+                CustomSidebarSectionConfig {
+                    id: "build".into(),
+                    title: Some("Build status".into()),
+                    highlight_token: Some("vault_broker".into()),
+                    max_rows: MAX_CUSTOM_SECTION_MAX_ROWS,
+                    placement: SidebarSectionPlacement::BelowAgents,
+                },
+                CustomSidebarSectionConfig {
+                    id: "deploy".into(),
+                    title: None,
+                    highlight_token: None,
+                    max_rows: DEFAULT_CUSTOM_SECTION_MAX_ROWS,
+                    placement: SidebarSectionPlacement::BelowAgents,
+                },
+                CustomSidebarSectionConfig {
+                    id: "minimum".into(),
+                    title: None,
+                    highlight_token: None,
+                    max_rows: MIN_CUSTOM_SECTION_MAX_ROWS,
+                    placement: SidebarSectionPlacement::BelowAgents,
+                },
+            ]
+        );
+        assert_eq!(config.ui.sidebar.resolved_sections().len(), 3);
+    }
+
+    #[test]
+    fn bad_and_duplicate_section_ids_are_diagnostic_and_ignored() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[[ui.sidebar.sections]]
+id = "bad.id"
+placement = "below_agents"
+
+[[ui.sidebar.sections]]
+id = "build"
+placement = "below_agents"
+
+[[ui.sidebar.sections]]
+id = "build"
+title = "duplicate"
+placement = "below_agents"
+"#,
+        )
+        .expect("section config remains parseable");
+
+        let resolved = config.ui.sidebar.resolved_sections();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].id, "build");
+        let diagnostics = config.collect_diagnostics();
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("invalid sidebar section id")));
+        assert!(diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.contains("duplicate sidebar section id")));
+    }
+
+    #[test]
+    fn invalid_section_highlight_token_is_diagnostic_and_disabled() {
+        let config: crate::config::Config = toml::from_str(
+            r#"
+[[ui.sidebar.sections]]
+id = "usage"
+highlight_token = "vault.broker"
+placement = "below_agents"
+"#,
+        )
+        .expect("invalid highlight token remains parseable");
+
+        let resolved = config.ui.sidebar.resolved_sections();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].id, "usage");
+        assert_eq!(resolved[0].highlight_token, None);
+        assert!(config
+            .collect_diagnostics()
+            .iter()
+            .any(|diagnostic| diagnostic.contains("invalid sidebar section highlight token")));
+    }
+
+    #[test]
+    fn section_placement_rejects_unknown_variants() {
+        let input = r#"
+[[ui.sidebar.sections]]
+id = "build"
+placement = "above_agents"
+"#;
+        assert!(toml::from_str::<crate::config::Config>(input).is_err());
     }
 }

@@ -20,6 +20,7 @@ mod ids;
 mod popup;
 mod runtime;
 mod session;
+pub(crate) mod sidebar_sections;
 pub mod state;
 mod tab_bar_status;
 mod terminal_targets;
@@ -484,6 +485,7 @@ impl App {
             headless_size: config.headless_size(),
             agent_panel_sort,
             agent_view_override: None,
+            sidebar_section_reports: Default::default(),
             sidebar_agents: config.ui.sidebar.agents.clone(),
             sidebar_spaces: config.ui.sidebar.spaces.clone(),
             next_agent_state_change_seq: 0,

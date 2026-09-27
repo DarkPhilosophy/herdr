@@ -249,10 +249,28 @@ pub(super) fn render_expanded(
     } else {
         Rect::new(area.right().saturating_sub(1), area.y, 1, area.height)
     };
+    let empty_sections = crate::protocol::ClientShellSidebarSections::default();
+    let live_sections = active_snapshot
+        .map(|snapshot| &snapshot.sidebar_sections)
+        .unwrap_or(&empty_sections);
+    let (primary_area, sections_area) =
+        crate::client::shell::sidebar_sections::split_sidebar_sections_area(
+            area,
+            live_sections,
+            &config.sidebar_sections,
+        );
+    hits.sidebar_split_area = primary_area;
     let (workspace_area, detail_area) =
-        crate::ui::expanded_sidebar_sections(area, state.sidebar_section_split);
+        crate::ui::expanded_sidebar_sections(primary_area, state.sidebar_section_split);
     hits.sidebar_section_divider =
-        crate::ui::sidebar_section_divider_rect(area, state.sidebar_section_split);
+        crate::ui::sidebar_section_divider_rect(primary_area, state.sidebar_section_split);
+    crate::client::shell::sidebar_sections::render_sidebar_sections(
+        buffer,
+        sections_area,
+        live_sections,
+        &config.sidebar_sections,
+        palette,
+    );
     put_text(
         buffer,
         workspace_area.x,

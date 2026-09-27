@@ -68,6 +68,9 @@ impl App {
         for ws_idx in workspaces {
             self.emit_workspace_token_updated(ws_idx);
         }
+        if self.state.sidebar_section_reports.expire_at(now) {
+            self.render_dirty.request_generic();
+        }
         self.sync_agent_metadata_deadline();
     }
 

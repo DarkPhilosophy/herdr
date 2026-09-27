@@ -40,21 +40,18 @@ pub(super) fn snapshot_with_completions(
     let focused_tab_id = location
         .and_then(|location| location.focused_tab_id().map(str::to_owned))
         .or_else(|| snapshot.focused_tab_id.clone());
-    let focused_pane_id = focused_tab_id
+    let focused_pane = focused_tab_id
         .as_deref()
         .and_then(|tab_id| app.parse_tab_id(tab_id))
         .and_then(|(workspace_index, tab_index)| {
-            let pane_id = app
-                .state
-                .workspaces
-                .get(workspace_index)?
-                .tabs
-                .get(tab_index)?
-                .layout
-                .focused();
-            app.public_pane_id(workspace_index, pane_id)
-        })
+            let workspace = app.state.workspaces.get(workspace_index)?;
+            let pane_id = workspace.tabs.get(tab_index)?.layout.focused();
+            Some((workspace_index, pane_id))
+        });
+    let focused_pane_id = focused_pane
+        .and_then(|(workspace_index, pane_id)| app.public_pane_id(workspace_index, pane_id))
         .or_else(|| snapshot.focused_pane_id.clone());
+    let sidebar_sections = sidebar_sections_projection(app, focused_pane);
     let workspaces = snapshot
         .workspaces
         .into_iter()
@@ -263,8 +260,38 @@ pub(super) fn snapshot_with_completions(
         panes,
         agents,
         commands: app.client_shell_command_manifest(),
+        sidebar_sections,
     };
     (shell, completions)
+}
+
+fn sidebar_sections_projection(
+    app: &app::App,
+    focused_pane: Option<(usize, crate::layout::PaneId)>,
+) -> protocol::ClientShellSidebarSections {
+    let mut focused_pane_tokens = focused_pane
+        .and_then(|(workspace_index, pane_id)| {
+            let terminal_id = app
+                .state
+                .workspaces
+                .get(workspace_index)?
+                .terminal_id(pane_id)?;
+            Some(
+                app.state
+                    .terminals
+                    .get(terminal_id)?
+                    .metadata_tokens
+                    .values(),
+            )
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .collect::<Vec<_>>();
+    focused_pane_tokens.sort();
+    protocol::ClientShellSidebarSections {
+        sections: app.state.sidebar_section_reports.live_sections(),
+        focused_pane_tokens,
+    }
 }
 
 pub(super) struct RenderedPaneSurface {

@@ -468,6 +468,18 @@ Use `herdr workspace report-metadata` in the same way for custom Space tokens. U
 
 Metadata reporters provide values only; styling stays in the local sidebar configuration. See [CLI reference: report metadata](/docs/cli-reference/#panes) for limits, clearing, sequencing, and expiry.
 
+Custom sidebar sections show rows that scripts and plugins publish through the `sidebar.report_section` API method, such as usage bars. Declare each section to show it below the Agent panel:
+
+```toml
+[[ui.sidebar.sections]]
+id = "usage"
+title = "Usage"
+max_rows = 12             # 1-24; extra rows collapse into "… N more"
+highlight_token = "broker" # optional: mark bar rows whose match_values contain the focused pane's $broker value
+```
+
+A section appears only while its publisher has live rows. Rows are either text spans with an optional right-aligned cluster (`wrap = true` lets long text wrap) or bars with a `fraction`, a title, a label, optional `fill`/`empty` colors, `inner_spans` drawn over the bar, and `solid = true` for a solid block bar. A leading row with only a right cluster is pinned beside the section title. The first source that reports a section owns it until it clears the section with an empty `rows` list or its `ttl_ms` expires. See `herdr api schema` for the full request shape.
+
 Sidebar row settings affect only the expanded desktop sidebar. Collapsed and mobile views keep their compact layouts.
 
 ## Notifications

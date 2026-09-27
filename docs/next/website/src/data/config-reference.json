@@ -929,6 +929,12 @@
           "description": "Modifier that lets right-click gestures pass through to pane apps. Empty disables it. Accepts ctrl, alt, cmd, super, meta, hyper, or a + separated combination; shift is rejected because many terminals reserve Shift+mouse."
         },
         {
+          "key": "ui.url_click_modifier",
+          "type": "string",
+          "default": "\"ctrl\"",
+          "description": "Modifier required on a left click to open pane URLs and OSC 8 hyperlinks. Use \"none\" to open links with a plain single click; Herdr still consumes the click so it never reaches the pane app."
+        },
+        {
           "key": "ui.redraw_on_focus_gained",
           "type": "boolean",
           "default": "true",
@@ -1412,6 +1418,17 @@
           "type": "enum",
           "default": "\"default\"",
           "description": "Sound override for detected Muse agents.",
+          "values": [
+            "default",
+            "on",
+            "off"
+          ]
+        },
+        {
+          "key": "ui.sound.agents.jcode",
+          "type": "enum",
+          "default": "\"default\"",
+          "description": "Sound override for detected Jcode agents.",
           "values": [
             "default",
             "on",

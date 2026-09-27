@@ -8,6 +8,7 @@ pub mod integrations;
 pub mod panes;
 pub mod plugins;
 pub mod response;
+pub mod sections;
 pub mod server;
 pub mod session;
 pub mod tabs;
@@ -22,6 +23,7 @@ pub use integrations::*;
 pub use panes::*;
 pub use plugins::*;
 pub use response::*;
+pub use sections::*;
 pub use server::*;
 pub use session::*;
 pub use tabs::*;
@@ -77,6 +79,8 @@ pub enum Method {
     SessionSnapshot(EmptyParams),
     #[serde(rename = "session.env")]
     SessionEnv(EmptyParams),
+    #[serde(rename = "sidebar.report_section")]
+    SidebarReportSection(SidebarReportSectionParams),
     #[serde(rename = "workspace.create")]
     WorkspaceCreate(WorkspaceCreateParams),
     #[serde(rename = "workspace.list")]

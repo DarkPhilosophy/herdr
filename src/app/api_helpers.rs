@@ -207,6 +207,14 @@ pub(super) const MAX_METADATA_TOKEN_KEYS_PER_RESOURCE: usize = 32;
 const MAX_METADATA_TOKEN_KEY_LEN: usize = 32;
 const MAX_METADATA_TOKEN_VALUE_LEN: usize = 80;
 
+pub(super) fn metadata_token_name_is_valid(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_METADATA_TOKEN_KEY_LEN
+        && value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-'))
+}
+
 pub(super) fn normalize_metadata_source(value: String) -> Result<String, &'static str> {
     let value = value.trim();
     if value.is_empty() {

@@ -8,6 +8,7 @@ mod layouts;
 mod panes;
 pub(crate) mod plugins;
 pub(super) mod responses;
+mod sections;
 mod session;
 mod tabs;
 mod workspaces;
@@ -1024,6 +1025,9 @@ impl App {
                 );
             }
             Method::SessionSnapshot(_) => return self.handle_session_snapshot(request.id),
+            Method::SidebarReportSection(params) => {
+                return self.handle_sidebar_report_section(request.id, params);
+            }
             Method::SessionEnv(_) => {
                 return responses::encode_error(
                     request.id,

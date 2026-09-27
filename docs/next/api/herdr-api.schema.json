@@ -3836,6 +3836,190 @@
           ],
           "type": "object"
         },
+        "SectionBar": {
+          "properties": {
+            "empty": {
+              "description": "Color for remainder cells. Uses the span color grammar; when absent,\nremainder cells use the default dim style.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fill": {
+              "description": "Uniform color for filled cells. Uses the span color grammar; when\nabsent, filled cells use the default positional gradient.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "fraction": {
+              "format": "double",
+              "type": "number"
+            },
+            "inner_align": {
+              "anyOf": [
+                {
+                  "$ref": "#/schemas/request/$defs/SectionBarInnerAlign"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Alignment for `inner_spans` inside the bar: left (default) or right."
+            },
+            "inner_spans": {
+              "description": "Styled fragments rendered on top of the bar cells themselves\n(left-aligned, starting at the first cell). The bar cells remain\nvisible underneath: span text replaces the cell glyph at those\ncolumns, keeping the cell's background/color context.",
+              "items": {
+                "$ref": "#/schemas/request/$defs/SectionSpan"
+              },
+              "maxItems": 8,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "label": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "label_spans": {
+              "description": "Styled right-aligned label fragments. When present, these override\n`label`. The joined fragments are measured and truncated as one unit.",
+              "items": {
+                "$ref": "#/schemas/request/$defs/SectionSpan"
+              },
+              "maxItems": 8,
+              "type": [
+                "array",
+                "null"
+              ]
+            },
+            "match_values": {
+              "description": "Focus-matching values for this row. When its section config names a\npane metadata token, the row is marked while the focused pane's token\nvalue equals any entry. At most 8 values of 200 characters each.",
+              "items": {
+                "type": "string"
+              },
+              "maxItems": 8,
+              "type": "array"
+            },
+            "solid": {
+              "description": "When true, bar cells render as solid background blocks (space glyph\nwith the fill color as background) instead of █/░ glyphs. This is the\nomp-style usage bar look: a solid colored strip with text on top.",
+              "type": "boolean"
+            },
+            "title": {
+              "description": "Left-aligned title rendered before the bar cells.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "title_color": {
+              "description": "Color for the title. Uses the span color grammar.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "title_spans": {
+              "description": "Styled left-aligned title fragments. When present, these override\n`title` and `title_color`.",
+              "items": {
+                "$ref": "#/schemas/request/$defs/SectionSpan"
+              },
+              "maxItems": 8,
+              "type": [
+                "array",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "fraction"
+          ],
+          "type": "object"
+        },
+        "SectionBarInnerAlign": {
+          "oneOf": [
+            {
+              "enum": [
+                "left",
+                "right"
+              ],
+              "type": "string"
+            },
+            {
+              "const": "boundary",
+              "description": "Text starts at the fill boundary (column `filled`), flowing right\nover the remaining cells; falls back to 0 when the text is wider\nthan the remaining space.",
+              "type": "string"
+            }
+          ]
+        },
+        "SectionRow": {
+          "anyOf": [
+            {
+              "properties": {
+                "right": {
+                  "description": "Optional cluster rendered right-aligned after at least one cell of\nseparation from the left cluster.",
+                  "items": {
+                    "$ref": "#/schemas/request/$defs/SectionSpan"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
+                },
+                "spans": {
+                  "items": {
+                    "$ref": "#/schemas/request/$defs/SectionSpan"
+                  },
+                  "maxItems": 8,
+                  "type": "array"
+                },
+                "wrap": {
+                  "description": "When true, the left cluster wraps onto additional lines instead of\nbeing clipped when it overflows the available row width. Ignored\nwhen `right` is non-empty (the right cluster always stays on its\nown right-aligned line). Default: false (clip on overflow).",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "spans"
+              ],
+              "type": "object"
+            },
+            {
+              "properties": {
+                "bar": {
+                  "$ref": "#/schemas/request/$defs/SectionBar"
+                }
+              },
+              "required": [
+                "bar"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "SectionSpan": {
+          "properties": {
+            "bold": {
+              "type": "boolean"
+            },
+            "color": {
+              "description": "Named theme token or `#rrggbb`.",
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "dim": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "type": "object"
+        },
         "ServerLiveHandoffParams": {
           "properties": {
             "expected_protocol": {
@@ -3870,6 +4054,50 @@
           },
           "required": [
             "socket_path"
+          ],
+          "type": "object"
+        },
+        "SidebarReportSectionParams": {
+          "properties": {
+            "rows": {
+              "description": "Rows to display. An empty list from the owning source clears the\nsection and releases ownership for another source.",
+              "items": {
+                "$ref": "#/schemas/request/$defs/SectionRow"
+              },
+              "maxItems": 24,
+              "type": "array"
+            },
+            "section_id": {
+              "maxLength": 32,
+              "minLength": 1,
+              "type": "string"
+            },
+            "seq": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "source": {
+              "description": "Stable reporter identity. The first accepted non-empty report owns the\nsection until that owner clears it or its content expires.",
+              "type": "string"
+            },
+            "ttl_ms": {
+              "format": "uint64",
+              "maximum": 86400000,
+              "minimum": 1,
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "section_id",
+            "source",
+            "rows"
           ],
           "type": "object"
         },
@@ -4909,6 +5137,22 @@
             },
             "params": {
               "$ref": "#/schemas/request/$defs/EmptyParams"
+            }
+          },
+          "required": [
+            "method",
+            "params"
+          ],
+          "type": "object"
+        },
+        {
+          "properties": {
+            "method": {
+              "const": "sidebar.report_section",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/schemas/request/$defs/SidebarReportSectionParams"
             }
           },
           "required": [

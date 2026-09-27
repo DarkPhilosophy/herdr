@@ -253,6 +253,7 @@ mod tests {
             panes: Vec::new(),
             agents: Vec::new(),
             commands: Vec::new(),
+            sidebar_sections: Default::default(),
         }
     }
 

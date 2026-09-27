@@ -954,6 +954,17 @@ pub struct ClientShellSnapshot {
     pub panes: Vec<ClientShellPane>,
     pub agents: Vec<ClientShellAgent>,
     pub commands: Vec<ClientShellCommand>,
+    /// API-fed custom sidebar sections and the focused pane's metadata tokens used to
+    /// highlight matching rows. Older endpoints omit it.
+    #[serde(default)]
+    pub sidebar_sections: ClientShellSidebarSections,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClientShellSidebarSections {
+    /// Live reported rows by section id; the client decides which ids to show from its config.
+    pub sections: Vec<(String, Vec<crate::api::schema::SectionRow>)>,
+    pub focused_pane_tokens: Vec<(String, String)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2872,6 +2883,7 @@ mod tests {
                 action: ClientShellCommandAction::Shell,
                 description: Some("deploy".into()),
             }],
+            sidebar_sections: Default::default(),
         }));
         let encoded = bincode::serde::encode_to_vec(&msg, bincode::config::standard()).unwrap();
         let (decoded, _): (ServerMessage, _) =

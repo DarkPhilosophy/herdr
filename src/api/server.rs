@@ -580,6 +580,7 @@ pub(crate) fn api_method_name(method: &Method) -> &'static str {
         Method::ClientShellSurfaceSet(_) => "client_shell.surface.set",
         Method::SessionSnapshot(_) => "session.snapshot",
         Method::SessionEnv(_) => "session.env",
+        Method::SidebarReportSection(_) => "sidebar.report_section",
         Method::WorkspaceCreate(_) => "workspace.create",
         Method::WorkspaceList(_) => "workspace.list",
         Method::WorkspaceGet(_) => "workspace.get",
