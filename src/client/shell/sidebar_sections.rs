@@ -17,6 +17,8 @@ use crate::config::{CustomSidebarSectionConfig, SidebarSectionPlacement};
 use crate::protocol::ClientShellSidebarSections;
 use crate::ui::truncate_end;
 
+/// Bottom sidebar row kept free for the collapse toggle (`«`).
+const SIDEBAR_TOGGLE_ROWS: u16 = 1;
 /// Rows kept for each of the spaces and agents regions before sections may grow.
 const MIN_PRIMARY_REGION_HEIGHT: u16 = 3;
 
@@ -45,7 +47,8 @@ fn focused_pane_token<'a>(sections: &'a ClientShellSidebarSections, key: &str) -
 }
 
 /// Splits the expanded sidebar into the spaces/agents region and a bottom region sized to the
-/// configured live sections. The sections region excludes the sidebar's right divider column.
+/// configured live sections. The sections region excludes the sidebar's right divider column and
+/// the last row, which holds the sidebar collapse toggle.
 pub(super) fn split_sidebar_sections_area(
     area: Rect,
     sections: &ClientShellSidebarSections,
@@ -61,6 +64,7 @@ pub(super) fn split_sidebar_sections_area(
         .fold(0u16, u16::saturating_add);
     let max = area
         .height
+        .saturating_sub(SIDEBAR_TOGGLE_ROWS)
         .saturating_sub(MIN_PRIMARY_REGION_HEIGHT.saturating_mul(2));
     let min = configs.iter().find_map(|config| {
         section_rows(sections, &config.id)
@@ -75,7 +79,9 @@ pub(super) fn split_sidebar_sections_area(
         area.x,
         area.y,
         area.width,
-        area.height.saturating_sub(height),
+        area.height
+            .saturating_sub(height)
+            .saturating_sub(SIDEBAR_TOGGLE_ROWS),
     );
     let sections_area = Rect::new(area.x, primary.bottom(), content_width, height);
     (primary, sections_area)
@@ -948,9 +954,9 @@ mod tests {
             &live("build", rows),
             &[config("build", Some("Build"))],
         );
-        // Divider + title + one row, carved from the bottom, excluding the divider column.
-        assert_eq!(sections, Rect::new(0, 37, 29, 3));
-        assert_eq!(primary, Rect::new(0, 0, 30, 37));
+        // Divider + title + one row above the toggle row, excluding the divider column.
+        assert_eq!(sections, Rect::new(0, 36, 29, 3));
+        assert_eq!(primary, Rect::new(0, 0, 30, 36));
     }
 
     #[test]
