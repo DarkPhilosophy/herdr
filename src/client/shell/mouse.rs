@@ -1910,9 +1910,17 @@ impl ClientShellState {
                 self.workspace_press = None;
                 self.tab_press = None;
                 self.chrome_drag = None;
-                if super::contains(self.hits.sidebar_divider, point)
-                    && !super::contains(self.hits.sidebar_toggle, point)
-                {
+                // The toggle is painted over the agent scrollbar's last cell.
+                if super::contains(self.hits.sidebar_toggle, point) {
+                    self.sidebar_collapsed = !self.sidebar_collapsed;
+                    self.sidebar_collapsed_manual = true;
+                    self.invalidate_pane_surface();
+                    outcome.repaint = true;
+                    outcome.resize = true;
+                    self.persist_chrome_preferences(outcome);
+                    return;
+                }
+                if super::contains(self.hits.sidebar_divider, point) {
                     let now = std::time::Instant::now();
                     let double_click = self.last_sidebar_divider_click.is_some_and(|last| {
                         now.duration_since(last) <= std::time::Duration::from_millis(350)
@@ -2048,15 +2056,6 @@ impl ClientShellState {
                         .saturating_add(1)
                         .min(tab_count.saturating_sub(1));
                     outcome.repaint = true;
-                    return;
-                }
-                if super::contains(self.hits.sidebar_toggle, point) {
-                    self.sidebar_collapsed = !self.sidebar_collapsed;
-                    self.sidebar_collapsed_manual = true;
-                    self.invalidate_pane_surface();
-                    outcome.repaint = true;
-                    outcome.resize = true;
-                    self.persist_chrome_preferences(outcome);
                     return;
                 }
                 let group_toggle = self.hits.workspaces.iter().find_map(|hit| {
