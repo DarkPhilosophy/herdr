@@ -148,6 +148,8 @@ fn state_with_scrollable_agents() -> (ClientShellState, ClientEndpointId) {
     (state, remote)
 }
 
+/// Checks that the visible toggle wins overlapping scrollbar clicks and can reopen
+/// the sidebar, for both endpoint layouts and both ends of the overflowing list.
 #[test]
 fn sidebar_toggle_remains_clickable_with_overflowing_agents() {
     for saved_machine in [false, true] {
