@@ -92,6 +92,42 @@ fn window_tag(s: &Snapshot) -> String {
     }
 }
 
+/// Limit-id segments after the provider prefix, as a readable qualifier. Only `default` and
+/// segments that merely repeat the window already shown in `window` are dropped, so every other
+/// distinguishing segment survives verbatim:
+/// `google-antigravity:anthropic:default:weekly` + `Weekly` -> `Anthropic`.
+fn limit_qualifier(limit_id: &str, window: &str) -> String {
+    let rest = limit_id.split_once(':').map_or(limit_id, |(_, r)| r);
+    let window = window.to_lowercase();
+    let mut seen: Vec<String> = Vec::new();
+    for word in rest.split([':', '-']).filter(|w| !w.is_empty() && *w != "default") {
+        let lower = word.to_lowercase();
+        if window.contains(&lower) || seen.contains(&lower) {
+            continue;
+        }
+        seen.push(lower);
+    }
+    seen.iter().map(|w| config::derive_label(w)).collect::<Vec<_>>().join(" ")
+}
+
+/// Rows of one provider whose tag collides (same account, same tag) get the qualifier from their
+/// `limit_id` so distinct limits never render as identical lines. Unique tags are left unchanged.
+fn disambiguate_tags(list: &[Snapshot], tags: &mut [String]) {
+    let original: Vec<String> = tags.to_vec();
+    for i in 0..tags.len() {
+        let collides = (0..original.len()).any(|j| {
+            j != i && list[j].account_key == list[i].account_key && original[j] == original[i]
+        });
+        if !collides {
+            continue;
+        }
+        let qualifier = limit_qualifier(&list[i].limit_id, &original[i]);
+        if !qualifier.is_empty() {
+            tags[i] = format!("{qualifier} {}", original[i]);
+        }
+    }
+}
+
 /// Builds every row for one publish cycle. Pure given a connection and clock.
 pub fn compose(conn: &rusqlite::Connection, cfg: &Config, now_ms: i64) -> Result<Vec<Value>, source::SourceError> {
     // Load through the grace window; rows older than `max_age` render dimmed.
@@ -143,17 +179,18 @@ pub fn compose(conn: &rusqlite::Connection, cfg: &Config, now_ms: i64) -> Result
                     &b.limit_id,
                 ))
         });
-        for s in &list {
+        let mut tags: Vec<String> = list.iter().map(window_tag).collect();
+        disambiguate_tags(&list, &mut tags);
+        for (s, tag) in list.iter().zip(&tags) {
             let account = match s.email.as_deref().map(str::trim).filter(|e| !e.is_empty()) {
                 Some(e) => mask_identity(e),
                 None => label.to_lowercase(),
             };
-            let tag = window_tag(s);
             let age_ms = now_ms - s.recorded_at_ms;
             rows.extend(usage_rows(&Usage {
                 account: &account,
                 provider: &label,
-                window: &tag,
+                window: tag,
                 used_fraction: s.used_fraction,
                 resets_in: s.resets_at_ms.map(|r| (r - now_ms) / 1000),
                 stale_age: (age_ms > cfg.max_age_ms).then_some(age_ms / 1000),
@@ -500,6 +537,49 @@ mod tests {
         assert!(compose(&c, &cfg(&["anthropic"]), NOW).unwrap().len() == 1);
         let with_devin = texts(&compose(&c, &cfg(&["anthropic", "devin"]), NOW).unwrap());
         assert!(with_devin.iter().any(|s| s == "50% free"));
+    }
+
+    fn insert_limit(c: &rusqlite::Connection, provider: &str, limit: &str, window: &str) {
+        c.execute(
+            "INSERT INTO usage_history (recorded_at, provider, account_key, email, limit_id, label, window_label, used_fraction)
+             VALUES (?1,?2,'a','a@x',?3,?3,?4,0.5)",
+            (NOW - 1, provider, limit, window),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn colliding_window_labels_are_qualified_from_the_limit_id() {
+        let c = memory_db();
+        for team in ["anthropic", "google", "openai"] {
+            insert_limit(&c, "antigravity", &format!("antigravity:{team}:default:weekly"), "Weekly");
+        }
+        let t = texts(&compose(&c, &cfg(&["antigravity"]), NOW).unwrap());
+        for expected in ["Anthropic Weekly", "Google Weekly", "Openai Weekly"] {
+            assert!(t.iter().any(|s| s == expected), "missing {expected} in {t:?}");
+        }
+        assert!(!t.iter().any(|s| s == "Weekly"));
+    }
+
+    #[test]
+    fn cursor_style_limits_with_identical_windows_stay_distinguishable() {
+        let c = memory_db();
+        insert_limit(&c, "cursor", "cursor:usd:individual-api", "Monthly");
+        insert_limit(&c, "cursor", "cursor:usd:individual-auto", "Monthly");
+        let t = texts(&compose(&c, &cfg(&["cursor"]), NOW).unwrap());
+        assert!(t.iter().any(|s| s == "Usd Individual-api Monthly" || s.ends_with("Api Monthly")), "{t:?}");
+        let monthly: Vec<_> = t.iter().filter(|s| s.ends_with("Monthly")).collect();
+        assert_eq!(monthly.len(), 2);
+        assert_ne!(monthly[0], monthly[1]);
+    }
+
+    #[test]
+    fn unique_tags_are_never_qualified() {
+        let c = memory_db();
+        insert_limit(&c, "devin", "devin:quota:weekly", "Weekly Quota");
+        insert_limit(&c, "devin", "devin:credits:flow", "Plan Period");
+        let t = texts(&compose(&c, &cfg(&["devin"]), NOW).unwrap());
+        assert!(t.iter().any(|s| s == "Weekly Quota") && t.iter().any(|s| s == "Plan Period"));
     }
 
     #[test]
