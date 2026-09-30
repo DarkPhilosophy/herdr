@@ -2977,31 +2977,6 @@
           ],
           "type": "object"
         },
-        "PaneReportCodexSessionParams": {
-          "properties": {
-            "agent_session_id": {
-              "type": "string"
-            },
-            "pane_id": {
-              "type": "string"
-            },
-            "reporter_pid": {
-              "format": "uint32",
-              "minimum": 0,
-              "type": "integer"
-            },
-            "session_start_source": {
-              "type": "string"
-            }
-          },
-          "required": [
-            "pane_id",
-            "agent_session_id",
-            "session_start_source",
-            "reporter_pid"
-          ],
-          "type": "object"
-        },
         "PaneReportMetadataParams": {
           "properties": {
             "agent": {
@@ -6229,22 +6204,6 @@
         {
           "properties": {
             "method": {
-              "const": "pane.report_codex_session",
-              "type": "string"
-            },
-            "params": {
-              "$ref": "#/schemas/request/$defs/PaneReportCodexSessionParams"
-            }
-          },
-          "required": [
-            "method",
-            "params"
-          ],
-          "type": "object"
-        },
-        {
-          "properties": {
-            "method": {
               "const": "pane.report_metadata",
               "type": "string"
             },
@@ -7080,15 +7039,6 @@
             "set",
             "cleared",
             "no_foreground_client"
-          ],
-          "type": "string"
-        },
-        "CodexSessionReportStatus": {
-          "enum": [
-            "applied",
-            "unchanged",
-            "invalidated",
-            "rejected"
           ],
           "type": "string"
         },
@@ -10767,22 +10717,6 @@
               },
               "required": [
                 "type"
-              ],
-              "type": "object"
-            },
-            {
-              "properties": {
-                "status": {
-                  "$ref": "#/schemas/success_response/$defs/CodexSessionReportStatus"
-                },
-                "type": {
-                  "const": "codex_session_report",
-                  "type": "string"
-                }
-              },
-              "required": [
-                "type",
-                "status"
               ],
               "type": "object"
             }
