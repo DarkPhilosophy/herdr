@@ -1,0 +1,28 @@
+id = "herdr-usage-monitor"
+name = "Usage Monitor"
+version = "0.2.0"
+min_herdr_version = "0.7.4"
+description = "Show Claude and Codex rate-limit usage bars in a custom sidebar section, read from omp's local usage snapshots"
+platforms = ["linux"]
+
+# Build once with: cargo build --release  (in this directory)
+[[startup]]
+command = ["target/release/herdr-usage-monitor", "--start"]
+
+[[actions]]
+id = "start"
+title = "Start usage monitor"
+contexts = ["global"]
+command = ["target/release/herdr-usage-monitor", "--start"]
+
+[[actions]]
+id = "stop"
+title = "Stop usage monitor"
+contexts = ["global"]
+command = ["target/release/herdr-usage-monitor", "--stop"]
+
+[[actions]]
+id = "refresh"
+title = "Refresh usage now"
+contexts = ["global"]
+command = ["target/release/herdr-usage-monitor", "--refresh"]

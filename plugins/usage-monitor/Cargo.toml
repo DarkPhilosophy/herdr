@@ -1,0 +1,26 @@
+[package]
+name = "herdr-usage-monitor"
+version = "0.2.0"
+edition = "2021"
+description = "Herdr sidebar section showing omp provider rate-limit usage"
+publish = false
+
+# Standalone crate: keep it out of the herdr workspace that contains this directory.
+[workspace]
+
+[[bin]]
+name = "herdr-usage-monitor"
+path = "src/main.rs"
+
+[dependencies]
+rusqlite = { version = "0.40", default-features = false, features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

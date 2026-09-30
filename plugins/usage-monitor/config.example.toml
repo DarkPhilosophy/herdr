@@ -1,0 +1,15 @@
+# Usage monitor config. Data source: omp's local usage snapshots (read-only).
+# Only providers listed here are shown, in this order. Any provider omp records
+# usage for can be added by its omp id (e.g. "cursor", "zai", "kimi-code").
+# Remove `providers` to show every provider omp has fresh data for.
+providers = ["anthropic", "openai-codex", "devin"]
+
+# Live window: snapshots newer than this render as current usage.
+max_age_secs = 1800
+# Grace window past max_age: last known bar stays visible, dimmed with its age.
+grace_secs = 21600
+
+[labels]
+anthropic = "Claude"
+openai-codex = "Codex"
+devin = "Devin"
