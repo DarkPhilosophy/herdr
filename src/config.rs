@@ -30,7 +30,7 @@ pub use self::{
     },
     sidebar::{
         AgentSidebarToken, AgentsSidebarConfig, CustomSidebarSectionConfig, HostBannerAnimation,
-        HostBannerGlyph, HostBannerGradient, HostBannerSpeed, SidebarConfig, SidebarHostConfig,
+        HostBannerGlyph, HostBannerGradient, SidebarConfig, SidebarHostConfig,
         SidebarSectionPlacement, SidebarTokenStyle, SpaceSidebarToken, SpacesSidebarConfig,
     },
     sound::SoundConfig,
