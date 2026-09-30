@@ -53,6 +53,7 @@ impl ClientShellState {
             sidebar_section_split: self
                 .sidebar_section_split_manual
                 .then_some(self.sidebar_section_split),
+            sidebar_sections_height: self.sidebar_sections_height,
             sidebar_collapsed: self
                 .sidebar_collapsed_manual
                 .then_some(self.sidebar_collapsed),

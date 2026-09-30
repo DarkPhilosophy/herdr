@@ -54,6 +54,18 @@ pub(super) fn split_sidebar_sections_area(
     sections: &ClientShellSidebarSections,
     configs: &[CustomSidebarSectionConfig],
 ) -> (Rect, Rect) {
+    split_sidebar_sections_area_with_height(area, sections, configs, None)
+}
+
+/// Same as [`split_sidebar_sections_area`], but `preferred_height` (rows the user dragged the
+/// block to) replaces the content-derived height. It is still clamped so the spaces and agents
+/// regions keep their minimum rows and the block keeps at least its divider, title and one row.
+pub(super) fn split_sidebar_sections_area_with_height(
+    area: Rect,
+    sections: &ClientShellSidebarSections,
+    configs: &[CustomSidebarSectionConfig],
+    preferred_height: Option<u16>,
+) -> (Rect, Rect) {
     let content_width = area.width.saturating_sub(1);
     let requested = configs
         .iter()
@@ -62,10 +74,7 @@ pub(super) fn split_sidebar_sections_area(
             configured_section_height(sections, config, content_width.saturating_sub(marker_width))
         })
         .fold(0u16, u16::saturating_add);
-    let max = area
-        .height
-        .saturating_sub(SIDEBAR_TOGGLE_ROWS)
-        .saturating_sub(MIN_PRIMARY_REGION_HEIGHT.saturating_mul(2));
+    let max = sections_max_height(area);
     let min = configs.iter().find_map(|config| {
         section_rows(sections, &config.id)
             // Divider + optional title header + one content row.
@@ -74,7 +83,7 @@ pub(super) fn split_sidebar_sections_area(
     let Some(min) = min.filter(|min| content_width > 0 && max >= *min) else {
         return (area, Rect::default());
     };
-    let height = requested.clamp(min, max);
+    let height = preferred_height.unwrap_or(requested).clamp(min, max);
     let primary = Rect::new(
         area.x,
         area.y,
@@ -85,6 +94,22 @@ pub(super) fn split_sidebar_sections_area(
     );
     let sections_area = Rect::new(area.x, primary.bottom(), content_width, height);
     (primary, sections_area)
+}
+
+/// Tallest the sections block may grow while spaces and agents keep their minimum rows.
+pub(super) fn sections_max_height(area: Rect) -> u16 {
+    area.height
+        .saturating_sub(SIDEBAR_TOGGLE_ROWS)
+        .saturating_sub(MIN_PRIMARY_REGION_HEIGHT.saturating_mul(2))
+}
+
+/// One-row grab handle on the sections block's top edge (the divider line the renderer draws
+/// first). Empty when no sections are shown.
+pub(super) fn sections_divider_rect(primary: Rect, sections_area: Rect) -> Rect {
+    if sections_area.width == 0 || sections_area.height == 0 {
+        return Rect::default();
+    }
+    Rect::new(sections_area.x, primary.bottom(), sections_area.width, 1)
 }
 
 fn configured_section_height(

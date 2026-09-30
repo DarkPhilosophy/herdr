@@ -268,12 +268,15 @@ pub(super) fn render_expanded(
         .map(|snapshot| &snapshot.sidebar_sections)
         .unwrap_or(&empty_sections);
     let (primary_area, sections_area) =
-        crate::client::shell::sidebar_sections::split_sidebar_sections_area(
+        crate::client::shell::sidebar_sections::split_sidebar_sections_area_with_height(
             area,
             live_sections,
             &config.sidebar_sections,
+            state.sidebar_sections_height,
         );
     hits.sidebar_split_area = primary_area;
+    hits.sidebar_sections_divider =
+        crate::client::shell::sidebar_sections::sections_divider_rect(primary_area, sections_area);
     let (workspace_area, detail_area) =
         crate::ui::expanded_sidebar_sections(primary_area, state.sidebar_section_split);
     hits.sidebar_section_divider =

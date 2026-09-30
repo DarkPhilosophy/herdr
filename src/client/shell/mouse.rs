@@ -21,6 +21,21 @@ impl ClientShellState {
         }
     }
 
+    /// Sets the sections block height so its top edge follows the mouse. The block runs from that
+    /// edge to the row above the collapse toggle; the render pass clamps to the allowed range.
+    fn set_sidebar_sections_height_from_row(&mut self, row: u16, outcome: &mut ClientShellInput) {
+        let bottom = self.hits.sidebar_divider.bottom();
+        if bottom == 0 {
+            return;
+        }
+        // Last sidebar row holds the collapse toggle; the block sits directly above it.
+        let height = bottom.saturating_sub(1).saturating_sub(row).max(1);
+        if self.sidebar_sections_height != Some(height) {
+            self.sidebar_sections_height = Some(height);
+            outcome.repaint = true;
+        }
+    }
+
     fn set_sidebar_section_from_row(&mut self, row: u16, outcome: &mut ClientShellInput) {
         let divider = if self.hits.sidebar_split_area.height > 0 {
             self.hits.sidebar_split_area
@@ -1006,6 +1021,10 @@ impl ClientShellState {
                     self.set_sidebar_section_from_row(mouse.row, outcome);
                     return;
                 }
+                Some(ClientChromeDrag::SidebarSections) => {
+                    self.set_sidebar_sections_height_from_row(mouse.row, outcome);
+                    return;
+                }
                 Some(ClientChromeDrag::WorkspaceScrollbar { grab_row_offset }) => {
                     if let Some(metrics) = self.hits.workspace_scroll_metrics {
                         let offset = crate::ui::scrollbar_offset_from_drag_row(
@@ -1333,7 +1352,9 @@ impl ClientShellState {
                             );
                         }
                     }
-                    ClientChromeDrag::SidebarWidth | ClientChromeDrag::SidebarSection => {
+                    ClientChromeDrag::SidebarWidth
+                    | ClientChromeDrag::SidebarSection
+                    | ClientChromeDrag::SidebarSections => {
                         self.persist_chrome_preferences(outcome);
                     }
                     ClientChromeDrag::WorkspaceScrollbar { .. }
@@ -1935,6 +1956,23 @@ impl ClientShellState {
                     } else {
                         self.chrome_drag = Some(ClientChromeDrag::SidebarWidth);
                         self.set_sidebar_width_from_column(mouse.column, outcome);
+                    }
+                    return;
+                }
+                if super::contains(self.hits.sidebar_sections_divider, point) {
+                    let now = std::time::Instant::now();
+                    let double_click = self.last_sidebar_sections_click.is_some_and(|last| {
+                        now.duration_since(last) <= std::time::Duration::from_millis(350)
+                    });
+                    self.last_sidebar_sections_click = Some(now);
+                    if double_click {
+                        // Back to content-sized.
+                        self.sidebar_sections_height = None;
+                        outcome.repaint = true;
+                        self.persist_chrome_preferences(outcome);
+                    } else {
+                        self.chrome_drag = Some(ClientChromeDrag::SidebarSections);
+                        self.set_sidebar_sections_height_from_row(mouse.row, outcome);
                     }
                     return;
                 }

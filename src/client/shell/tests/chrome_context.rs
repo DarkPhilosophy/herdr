@@ -523,3 +523,191 @@ fn close_confirmation_error_becomes_client_owned_overlay_and_stable_group_close(
             if params.workspace_id == "ws_1" && params.close_group
     ));
 }
+
+#[test]
+fn sections_block_top_edge_resizes_dynamically_and_persists() {
+    use crate::api::schema::{SectionBar, SectionBarInnerAlign, SectionRow, SectionSpan};
+    use crate::protocol::ClientShellSidebarSections;
+
+    let span = |text: &str| SectionSpan {
+        text: text.into(),
+        color: None,
+        bold: false,
+        dim: false,
+    };
+    // 7 usage limits x (identity row + bar row) = 14 body rows, like the usage monitor.
+    let rows: Vec<SectionRow> = (0..7)
+        .flat_map(|_| {
+            [
+                SectionRow::Spans {
+                    spans: vec![span("ual*** (Claude) 5h")],
+                    right: vec![span("2h06m")],
+                    wrap: false,
+                },
+                SectionRow::Bar {
+                    bar: SectionBar {
+                        fraction: 0.08,
+                        solid: true,
+                        inner_align: Some(SectionBarInnerAlign::Boundary),
+                        inner_spans: Some(vec![span("92% free")]),
+                        ..SectionBar::default()
+                    },
+                },
+            ]
+        })
+        .collect();
+
+    let mut config = Config::default();
+    config.ui.sidebar.sections = vec![crate::config::CustomSidebarSectionConfig {
+        id: "usage".into(),
+        title: Some("Usage".into()),
+        max_rows: 20,
+        ..crate::config::CustomSidebarSectionConfig::default()
+    }];
+
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let mut snap = snapshot();
+    snap.sidebar_sections = ClientShellSidebarSections {
+        sections: vec![("usage".into(), rows)],
+        focused_pane_tokens: Vec::new(),
+    };
+    state.set_snapshot(Box::new(snap));
+    state.set_pane_surface(surface());
+    let height = 60u16;
+    state
+        .compose(106, height)
+        .expect("sidebar with usage section");
+
+    let mouse = |kind, row| {
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column: 2,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+    // Rows from the block's top edge to the row above the collapse toggle.
+    let sections_height = |state: &ClientShellState| {
+        state.hits.sidebar_divider.bottom() - 1 - state.hits.sidebar_sections_divider.y
+    };
+
+    // 1. The top edge of the block is a real hit target.
+    let handle = state.hits.sidebar_sections_divider;
+    assert!(
+        handle.width > 0 && handle.height == 1,
+        "no grab handle on the sections block top edge"
+    );
+    let automatic = sections_height(&state);
+
+    // 2. Dragging up grows the block, dragging down shrinks it.
+    state.handle_raw_events(vec![mouse(
+        MouseEventKind::Down(MouseButton::Left),
+        handle.y,
+    )]);
+    assert!(matches!(
+        state.chrome_drag,
+        Some(ClientChromeDrag::SidebarSections)
+    ));
+    state.handle_raw_events(vec![mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        handle.y - 6,
+    )]);
+    state.compose(106, height).expect("grown");
+    let grown = sections_height(&state);
+    assert!(grown > automatic, "drag up: {automatic} -> {grown}");
+
+    state.handle_raw_events(vec![mouse(
+        MouseEventKind::Drag(MouseButton::Left),
+        state.hits.sidebar_sections_divider.y + 9,
+    )]);
+    state.compose(106, height).expect("shrunk");
+    let shrunk = sections_height(&state);
+    assert!(shrunk < grown, "drag down: {grown} -> {shrunk}");
+
+    // 3. Both extremes are reachable: down to divider+title+1 row, up to the layout maximum.
+    state.handle_raw_events(vec![mouse(MouseEventKind::Drag(MouseButton::Left), height)]);
+    state.compose(106, height).expect("minimum");
+    assert_eq!(
+        sections_height(&state),
+        3,
+        "minimum is divider + title + one row"
+    );
+    state.handle_raw_events(vec![mouse(MouseEventKind::Drag(MouseButton::Left), 0)]);
+    state.compose(106, height).expect("maximum");
+    assert_eq!(
+        sections_height(&state),
+        height - 1 - 6,
+        "maximum leaves spaces and agents their minimum rows"
+    );
+
+    // 4. Release persists the chosen height.
+    state.handle_raw_events(vec![mouse(MouseEventKind::Up(MouseButton::Left), 0)]);
+    assert!(state.chrome_drag.is_none());
+    assert!(state.sidebar_sections_height.is_some());
+
+    // 5. Double-click returns to content-sized.
+    let handle = state.hits.sidebar_sections_divider;
+    for _ in 0..2 {
+        state.handle_raw_events(vec![mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            handle.y,
+        )]);
+        state.handle_raw_events(vec![mouse(MouseEventKind::Up(MouseButton::Left), handle.y)]);
+    }
+    assert_eq!(state.sidebar_sections_height, None);
+    state.compose(106, height).expect("automatic again");
+    assert_eq!(sections_height(&state), automatic);
+}
+
+#[test]
+fn width_divider_click_does_not_arm_sections_double_click_reset() {
+    use crate::api::schema::{SectionRow, SectionSpan};
+    use crate::protocol::ClientShellSidebarSections;
+
+    let mut config = Config::default();
+    config.ui.sidebar.sections = vec![crate::config::CustomSidebarSectionConfig {
+        id: "usage".into(),
+        title: Some("Usage".into()),
+        ..crate::config::CustomSidebarSectionConfig::default()
+    }];
+    let mut state = ClientShellState::new(ClientShellConfig::from_config(&config));
+    let mut snap = snapshot();
+    snap.sidebar_sections = ClientShellSidebarSections {
+        sections: vec![(
+            "usage".into(),
+            vec![SectionRow::Spans {
+                spans: vec![SectionSpan {
+                    text: "row".into(),
+                    color: None,
+                    bold: false,
+                    dim: false,
+                }],
+                right: Vec::new(),
+                wrap: false,
+            }],
+        )],
+        focused_pane_tokens: Vec::new(),
+    };
+    state.set_snapshot(Box::new(snap));
+    state.set_pane_surface(surface());
+    state.compose(106, 40).expect("frame");
+    state.sidebar_sections_height = Some(8);
+
+    let press = |column, row| {
+        RawInputEvent::Mouse(crossterm::event::MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::empty(),
+        })
+    };
+    let width_divider = state.hits.sidebar_divider;
+    let handle = state.hits.sidebar_sections_divider;
+    state.handle_raw_events(vec![press(width_divider.x, width_divider.y + 2)]);
+    state.handle_raw_events(vec![press(handle.x + 2, handle.y)]);
+    assert_eq!(
+        state.sidebar_sections_height.is_some(),
+        true,
+        "a width-divider click followed by one handle click must not reset the height"
+    );
+}

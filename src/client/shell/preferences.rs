@@ -20,6 +20,9 @@ pub(super) struct ClientChromePreferences {
     pub(super) sidebar_width: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) sidebar_section_split: Option<f32>,
+    /// Height in rows of the custom sections block; `None` sizes it from content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) sidebar_sections_height: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) sidebar_collapsed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -107,6 +107,8 @@ pub(super) struct ShellHitMap {
     pub(super) agent_sort_toggle: Rect,
     pub(super) sidebar_divider: Rect,
     pub(super) sidebar_section_divider: Rect,
+    /// One-row grab handle on the top edge of the custom sections block.
+    pub(super) sidebar_sections_divider: Rect,
     /// Spaces/agents region the section divider ratio is measured against.
     pub(super) sidebar_split_area: Rect,
     pub(super) sidebar_toggle: Rect,
@@ -202,6 +204,8 @@ pub(super) struct ClientTabPress {
 pub(super) enum ClientChromeDrag {
     SidebarWidth,
     SidebarSection,
+    /// Top edge of the custom sections block (resizes its height).
+    SidebarSections,
     WorkspaceScrollbar {
         grab_row_offset: u16,
     },
@@ -885,7 +889,10 @@ pub(crate) struct ClientShellState {
     pub(super) sidebar_width_manual: bool,
     pub(super) sidebar_section_split: f32,
     pub(super) sidebar_section_split_manual: bool,
+    /// User-chosen height of the custom sections block; `None` = sized from content.
+    pub(super) sidebar_sections_height: Option<u16>,
     pub(super) agent_panel_sort_manual: bool,
+    pub(super) last_sidebar_sections_click: Option<std::time::Instant>,
     pub(super) last_sidebar_divider_click: Option<std::time::Instant>,
     pub(super) chrome_drag: Option<ClientChromeDrag>,
     pub(super) workspace_press: Option<ClientWorkspacePress>,
@@ -1056,7 +1063,9 @@ impl ClientShellState {
             sidebar_width_manual: preferences.sidebar_width.is_some(),
             sidebar_section_split,
             sidebar_section_split_manual: preferences.sidebar_section_split.is_some(),
+            sidebar_sections_height: preferences.sidebar_sections_height,
             agent_panel_sort_manual: preferences.agent_panel_sort.is_some(),
+            last_sidebar_sections_click: None,
             last_sidebar_divider_click: None,
             chrome_drag: None,
             workspace_press: None,
